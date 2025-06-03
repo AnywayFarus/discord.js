@@ -1,12 +1,12 @@
 'use strict';
 
-const Action = require('./Action');
-const { Events } = require('../../util/Constants');
+const { Events } = require('../../util/Events.js');
+const { Action } = require('./Action.js');
 
-class MessageReactionRemoveEmoji extends Action {
+class MessageReactionRemoveEmojiAction extends Action {
   handle(data) {
-    const channel = this.getChannel(data);
-    if (!channel || !channel.isText()) return false;
+    const channel = this.getChannel({ id: data.channel_id, ...('guild_id' in data && { guild_id: data.guild_id }) });
+    if (!channel?.isTextBased()) return false;
 
     const message = this.getMessage(data, channel);
     if (!message) return false;
@@ -17,12 +17,13 @@ class MessageReactionRemoveEmoji extends Action {
 
     /**
      * Emitted when a bot removes an emoji reaction from a cached message.
+     *
      * @event Client#messageReactionRemoveEmoji
      * @param {MessageReaction} reaction The reaction that was removed
      */
-    this.client.emit(Events.MESSAGE_REACTION_REMOVE_EMOJI, reaction);
+    this.client.emit(Events.MessageReactionRemoveEmoji, reaction);
     return { reaction };
   }
 }
 
-module.exports = MessageReactionRemoveEmoji;
+exports.MessageReactionRemoveEmojiAction = MessageReactionRemoveEmojiAction;

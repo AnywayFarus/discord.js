@@ -1,7 +1,7 @@
 'use strict';
 
-const Action = require('./Action');
-const { Events } = require('../../util/Constants');
+const { Events } = require('../../util/Events.js');
+const { Action } = require('./Action.js');
 
 class GuildStickerCreateAction extends Action {
   handle(guild, createdSticker) {
@@ -9,12 +9,13 @@ class GuildStickerCreateAction extends Action {
     const sticker = guild.stickers._add(createdSticker);
     /**
      * Emitted whenever a custom sticker is created in a guild.
+     *
      * @event Client#stickerCreate
      * @param {Sticker} sticker The sticker that was created
      */
-    if (!already) this.client.emit(Events.GUILD_STICKER_CREATE, sticker);
+    if (!already) this.client.emit(Events.GuildStickerCreate, sticker);
     return { sticker };
   }
 }
 
-module.exports = GuildStickerCreateAction;
+exports.GuildStickerCreateAction = GuildStickerCreateAction;

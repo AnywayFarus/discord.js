@@ -1,13 +1,13 @@
 'use strict';
 
-const Action = require('./Action');
-const { Events } = require('../../util/Constants');
+const { Events } = require('../../util/Events.js');
+const { Action } = require('./Action.js');
 
-class MessageReactionRemoveAll extends Action {
+class MessageReactionRemoveAllAction extends Action {
   handle(data) {
     // Verify channel
-    const channel = this.getChannel(data);
-    if (!channel || !channel.isText()) return false;
+    const channel = this.getChannel({ id: data.channel_id, ...('guild_id' in data && { guild_id: data.guild_id }) });
+    if (!channel?.isTextBased()) return false;
 
     // Verify message
     const message = this.getMessage(data, channel);
@@ -17,7 +17,7 @@ class MessageReactionRemoveAll extends Action {
     const removed = message.reactions.cache.clone();
 
     message.reactions.cache.clear();
-    this.client.emit(Events.MESSAGE_REACTION_REMOVE_ALL, message, removed);
+    this.client.emit(Events.MessageReactionRemoveAll, message, removed);
 
     return { message };
   }
@@ -25,9 +25,10 @@ class MessageReactionRemoveAll extends Action {
 
 /**
  * Emitted whenever all reactions are removed from a cached message.
+ *
  * @event Client#messageReactionRemoveAll
  * @param {Message} message The message the reactions were removed from
  * @param {Collection<string|Snowflake, MessageReaction>} reactions The cached message reactions that were removed.
  */
 
-module.exports = MessageReactionRemoveAll;
+exports.MessageReactionRemoveAllAction = MessageReactionRemoveAllAction;

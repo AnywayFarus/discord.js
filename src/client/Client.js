@@ -2,34 +2,50 @@
 
 const process = require('node:process');
 const { Collection } = require('@discordjs/collection');
-const BaseClient = require('./BaseClient');
-const ActionsManager = require('./actions/ActionsManager');
-const ClientVoiceManager = require('./voice/ClientVoiceManager');
-const WebSocketManager = require('./websocket/WebSocketManager');
-const { Error, TypeError, RangeError } = require('../errors');
-const BaseGuildEmojiManager = require('../managers/BaseGuildEmojiManager');
-const ChannelManager = require('../managers/ChannelManager');
-const GuildManager = require('../managers/GuildManager');
-const UserManager = require('../managers/UserManager');
-const ShardClientUtil = require('../sharding/ShardClientUtil');
-const ClientPresence = require('../structures/ClientPresence');
-const GuildPreview = require('../structures/GuildPreview');
-const GuildTemplate = require('../structures/GuildTemplate');
-const Invite = require('../structures/Invite');
-const { Sticker } = require('../structures/Sticker');
-const StickerPack = require('../structures/StickerPack');
-const VoiceRegion = require('../structures/VoiceRegion');
-const Webhook = require('../structures/Webhook');
-const Widget = require('../structures/Widget');
-const { Events, InviteScopes, Status } = require('../util/Constants');
-const DataResolver = require('../util/DataResolver');
-const Intents = require('../util/Intents');
-const Options = require('../util/Options');
-const Permissions = require('../util/Permissions');
-const Sweepers = require('../util/Sweepers');
+const { makeURLSearchParams } = require('@discordjs/rest');
+const { WebSocketManager, WebSocketShardEvents, WebSocketShardStatus } = require('@discordjs/ws');
+const { GatewayDispatchEvents, GatewayIntentBits, OAuth2Scopes, Routes } = require('discord-api-types/v10');
+const { DiscordjsError, DiscordjsTypeError, ErrorCodes } = require('../errors/index.js');
+const { ChannelManager } = require('../managers/ChannelManager.js');
+const { GuildManager } = require('../managers/GuildManager.js');
+const { UserManager } = require('../managers/UserManager.js');
+const { ShardClientUtil } = require('../sharding/ShardClientUtil.js');
+const { ClientPresence } = require('../structures/ClientPresence.js');
+const { GuildPreview } = require('../structures/GuildPreview.js');
+const { GuildTemplate } = require('../structures/GuildTemplate.js');
+const { Invite } = require('../structures/Invite.js');
+const { SoundboardSound } = require('../structures/SoundboardSound.js');
+const { Sticker } = require('../structures/Sticker.js');
+const { StickerPack } = require('../structures/StickerPack.js');
+const { VoiceRegion } = require('../structures/VoiceRegion.js');
+const { Webhook } = require('../structures/Webhook.js');
+const { Widget } = require('../structures/Widget.js');
+const { resolveInviteCode, resolveGuildTemplateCode } = require('../util/DataResolver.js');
+const { Events } = require('../util/Events.js');
+const { IntentsBitField } = require('../util/IntentsBitField.js');
+const { Options } = require('../util/Options.js');
+const { PermissionsBitField } = require('../util/PermissionsBitField.js');
+const { Status } = require('../util/Status.js');
+const { Sweepers } = require('../util/Sweepers.js');
+const { BaseClient } = require('./BaseClient.js');
+const { ActionsManager } = require('./actions/ActionsManager.js');
+const { ClientVoiceManager } = require('./voice/ClientVoiceManager.js');
+const { PacketHandlers } = require('./websocket/handlers/index.js');
+
+const WaitingForGuildEvents = [GatewayDispatchEvents.GuildCreate, GatewayDispatchEvents.GuildDelete];
+const BeforeReadyWhitelist = [
+  GatewayDispatchEvents.Ready,
+  GatewayDispatchEvents.Resumed,
+  GatewayDispatchEvents.GuildCreate,
+  GatewayDispatchEvents.GuildDelete,
+  GatewayDispatchEvents.GuildMembersChunk,
+  GatewayDispatchEvents.GuildMemberAdd,
+  GatewayDispatchEvents.GuildMemberRemove,
+];
 
 /**
  * The main hub for interacting with the Discord API, and the starting point for any bot.
+ *
  * @extends {BaseClient}
  */
 class Client extends BaseClient {
@@ -42,113 +58,90 @@ class Client extends BaseClient {
     const data = require('node:worker_threads').workerData ?? process.env;
     const defaults = Options.createDefault();
 
-    if (this.options.shards === defaults.shards) {
-      if ('SHARDS' in data) {
-        this.options.shards = JSON.parse(data.SHARDS);
-      }
+    if (this.options.ws.shardIds === defaults.ws.shardIds && 'SHARDS' in data) {
+      const shards = JSON.parse(data.SHARDS);
+      this.options.ws.shardIds = Array.isArray(shards) ? shards : [shards];
     }
 
-    if (this.options.shardCount === defaults.shardCount) {
-      if ('SHARD_COUNT' in data) {
-        this.options.shardCount = Number(data.SHARD_COUNT);
-      } else if (Array.isArray(this.options.shards)) {
-        this.options.shardCount = this.options.shards.length;
-      }
+    if (this.options.ws.shardCount === defaults.ws.shardCount && 'SHARD_COUNT' in data) {
+      this.options.ws.shardCount = Number(data.SHARD_COUNT);
     }
 
-    const typeofShards = typeof this.options.shards;
-
-    if (typeofShards === 'undefined' && typeof this.options.shardCount === 'number') {
-      this.options.shards = Array.from({ length: this.options.shardCount }, (_, i) => i);
-    }
-
-    if (typeofShards === 'number') this.options.shards = [this.options.shards];
-
-    if (Array.isArray(this.options.shards)) {
-      this.options.shards = [
-        ...new Set(
-          this.options.shards.filter(item => !isNaN(item) && item >= 0 && item < Infinity && item === (item | 0)),
-        ),
-      ];
-    }
+    /**
+     * The presence of the Client
+     *
+     * @private
+     * @type {ClientPresence}
+     */
+    this.presence = new ClientPresence(this, this.options.ws.initialPresence ?? this.options.presence);
 
     this._validateOptions();
 
     /**
-     * Functions called when a cache is garbage collected or the Client is destroyed
-     * @type {Set<Function>}
+     * The current status of this Client
+     *
+     * @type {Status}
      * @private
      */
-    this._cleanups = new Set();
+    this.status = Status.Idle;
 
     /**
-     * The finalizers used to cleanup items.
-     * @type {FinalizationRegistry}
+     * A set of guild ids this Client expects to receive
+     *
+     * @name Client#expectedGuilds
+     * @type {Set<string>}
      * @private
      */
-    this._finalizers = new FinalizationRegistry(this._finalize.bind(this));
+    Object.defineProperty(this, 'expectedGuilds', { value: new Set(), writable: true });
 
     /**
-     * The WebSocket manager of the client
-     * @type {WebSocketManager}
+     * The ready timeout
+     *
+     * @name Client#readyTimeout
+     * @type {?NodeJS.Timeout}
+     * @private
      */
-    this.ws = new WebSocketManager(this);
+    Object.defineProperty(this, 'readyTimeout', { value: null, writable: true });
 
     /**
      * The action manager of the client
+     *
      * @type {ActionsManager}
      * @private
      */
     this.actions = new ActionsManager(this);
 
     /**
-     * The voice manager of the client
-     * @type {ClientVoiceManager}
-     */
-    this.voice = new ClientVoiceManager(this);
-
-    /**
-     * Shard helpers for the client (only if the process was spawned from a {@link ShardingManager})
-     * @type {?ShardClientUtil}
-     */
-    this.shard = process.env.SHARDING_MANAGER
-      ? ShardClientUtil.singleton(this, process.env.SHARDING_MANAGER_MODE)
-      : null;
-
-    /**
-     * All of the {@link User} objects that have been cached at any point, mapped by their ids
+     * The user manager of this client
+     *
      * @type {UserManager}
      */
     this.users = new UserManager(this);
 
     /**
-     * All of the guilds the client is currently handling, mapped by their ids -
+     * A manager of all the guilds the client is currently handling -
      * as long as sharding isn't being used, this will be *every* guild the bot is a member of
+     *
      * @type {GuildManager}
      */
     this.guilds = new GuildManager(this);
 
     /**
-     * All of the {@link Channel}s that the client is currently handling, mapped by their ids -
+     * All of the {@link BaseChannel}s that the client is currently handling -
      * as long as sharding isn't being used, this will be *every* channel in *every* guild the bot
      * is a member of. Note that DM channels will not be initially cached, and thus not be present
      * in the Manager without their explicit fetching or use.
+     *
      * @type {ChannelManager}
      */
     this.channels = new ChannelManager(this);
 
     /**
      * The sweeping functions and their intervals used to periodically sweep caches
+     *
      * @type {Sweepers}
      */
     this.sweepers = new Sweepers(this, this.options.sweepers);
-
-    /**
-     * The presence of the Client
-     * @private
-     * @type {ClientPresence}
-     */
-    this.presence = new ClientPresence(this, this.options.presence);
 
     Object.defineProperty(this, 'token', { writable: true });
     if (!this.token && 'DISCORD_TOKEN' in process.env) {
@@ -156,133 +149,314 @@ class Client extends BaseClient {
        * Authorization token for the logged in bot.
        * If present, this defaults to `process.env.DISCORD_TOKEN` when instantiating the client
        * <warn>This should be kept private at all times.</warn>
+       *
        * @type {?string}
        */
       this.token = process.env.DISCORD_TOKEN;
+    } else if (this.options.ws.token) {
+      this.token = this.options.ws.token;
     } else {
       this.token = null;
     }
 
+    const wsOptions = {
+      ...this.options.ws,
+      intents: this.options.intents.bitfield,
+      rest: this.rest,
+      // Explicitly nulled to always be set using `setToken` in `login`
+      token: null,
+    };
+
+    /**
+     * The WebSocket manager of the client
+     *
+     * @type {WebSocketManager}
+     */
+    this.ws = new WebSocketManager(wsOptions);
+
+    /**
+     * Shard helpers for the client (only if the process was spawned from a {@link ShardingManager})
+     *
+     * @type {?ShardClientUtil}
+     */
+    this.shard = process.env.SHARDING_MANAGER
+      ? ShardClientUtil.singleton(this, process.env.SHARDING_MANAGER_MODE)
+      : null;
+
+    /**
+     * The voice manager of the client
+     *
+     * @type {ClientVoiceManager}
+     */
+    this.voice = new ClientVoiceManager(this);
+
     /**
      * User that the client is logged in as
+     *
      * @type {?ClientUser}
      */
     this.user = null;
 
     /**
      * The application of this bot
+     *
      * @type {?ClientApplication}
      */
     this.application = null;
 
     /**
-     * Time at which the client was last regarded as being in the `READY` state
-     * (each time the client disconnects and successfully reconnects, this will be overwritten)
-     * @type {?Date}
+     * The latencies of the WebSocketShard connections
+     *
+     * @type {Collection<number, number>}
      */
-    this.readyAt = null;
+    this.pings = new Collection();
 
-    if (this.options.messageSweepInterval > 0) {
-      process.emitWarning(
-        'The message sweeping client options are deprecated, use the global sweepers instead.',
-        'DeprecationWarning',
-      );
-      this.sweepMessageInterval = setInterval(this.sweepMessages.bind(this), this.options.messageSweepInterval * 1_000);
-    }
+    /**
+     * The last time a ping was sent (a timestamp) for each WebSocketShard connection
+     *
+     * @type {Collection<number, number>}
+     */
+    this.lastPingTimestamps = new Collection();
+
+    /**
+     * Timestamp of the time the client was last {@link Status.Ready} at
+     *
+     * @type {?number}
+     */
+    this.readyTimestamp = null;
+
+    /**
+     * An array of queued events before this Client became ready
+     *
+     * @type {Object[]}
+     * @private
+     * @name Client#incomingPacketQueue
+     */
+    Object.defineProperty(this, 'incomingPacketQueue', { value: [] });
+
+    this._attachEvents();
   }
 
   /**
-   * All custom emojis that the client has access to, mapped by their ids
-   * @type {BaseGuildEmojiManager}
+   * Time at which the client was last regarded as being in the {@link Status.Ready} state
+   * (each time the client disconnects and successfully reconnects, this will be overwritten)
+   *
+   * @type {?Date}
    * @readonly
    */
-  get emojis() {
-    const emojis = new BaseGuildEmojiManager(this);
-    for (const guild of this.guilds.cache.values()) {
-      if (guild.available) for (const emoji of guild.emojis.cache.values()) emojis.cache.set(emoji.id, emoji);
-    }
-    return emojis;
+  get readyAt() {
+    return this.readyTimestamp && new Date(this.readyTimestamp);
   }
 
   /**
-   * Timestamp of the time the client was last `READY` at
-   * @type {?number}
-   * @readonly
-   */
-  get readyTimestamp() {
-    return this.readyAt?.getTime() ?? null;
-  }
-
-  /**
-   * How long it has been since the client last entered the `READY` state in milliseconds
+   * How long it has been since the client last entered the {@link Status.Ready} state in milliseconds
+   *
    * @type {?number}
    * @readonly
    */
   get uptime() {
-    return this.readyAt ? Date.now() - this.readyAt : null;
+    return this.readyTimestamp && Date.now() - this.readyTimestamp;
   }
 
   /**
    * Logs the client in, establishing a WebSocket connection to Discord.
+   *
    * @param {string} [token=this.token] Token of the account to log in with
    * @returns {Promise<string>} Token of the account used
    * @example
    * client.login('my token');
    */
   async login(token = this.token) {
-    if (!token || typeof token !== 'string') throw new Error('TOKEN_INVALID');
-    this.token = token = token.replace(/^(Bot|Bearer)\s*/i, '');
-    this.emit(
-      Events.DEBUG,
-      `Provided token: ${token
-        .split('.')
-        .map((val, i) => (i > 1 ? val.replace(/./g, '*') : val))
-        .join('.')}`,
-    );
+    if (!token || typeof token !== 'string') throw new DiscordjsError(ErrorCodes.TokenInvalid);
+    this.token = token.replace(/^bot\s*/i, '');
 
-    if (this.options.presence) {
-      this.options.ws.presence = this.presence._parse(this.options.presence);
-    }
+    this.rest.setToken(this.token);
 
-    this.emit(Events.DEBUG, 'Preparing to connect to the gateway...');
+    this.emit(Events.Debug, `Provided token: ${this._censoredToken}`);
+    this.emit(Events.Debug, 'Preparing to connect to the gateway...');
+
+    this.ws.setToken(this.token);
 
     try {
       await this.ws.connect();
       return this.token;
     } catch (error) {
-      this.destroy();
+      await this.destroy();
       throw error;
     }
   }
 
   /**
+   * Checks if the client can be marked as ready
+   *
+   * @private
+   */
+  async _checkReady() {
+    // Step 0. Clear the ready timeout, if it exists
+    if (this.readyTimeout) {
+      clearTimeout(this.readyTimeout);
+      this.readyTimeout = null;
+    }
+
+    // Step 1. If we don't have any other guilds pending, we are ready
+    if (
+      !this.expectedGuilds.size &&
+      (await this.ws.fetchStatus()).every(status => status === WebSocketShardStatus.Ready)
+    ) {
+      this.emit(Events.Debug, 'Client received all its guilds. Marking as fully ready.');
+
+      this._triggerClientReady();
+      return;
+    }
+
+    const hasGuildsIntent = this.options.intents.has(GatewayIntentBits.Guilds);
+    // Step 2. Create a timeout that will mark the client as ready if there are still unavailable guilds
+    // * The timeout is 15 seconds by default
+    // * This can be optionally changed in the client options via the `waitGuildTimeout` option
+    // * a timeout time of zero will skip this timeout, which potentially could cause the Client to miss guilds.
+
+    this.readyTimeout = setTimeout(
+      () => {
+        this.emit(
+          Events.Debug,
+          `${
+            hasGuildsIntent
+              ? `Client did not receive any guild packets in ${this.options.waitGuildTimeout} ms.`
+              : 'Client will not receive anymore guild packets.'
+          }\nUnavailable guild count: ${this.expectedGuilds.size}`,
+        );
+
+        this.readyTimeout = null;
+
+        this._triggerClientReady();
+      },
+      hasGuildsIntent ? this.options.waitGuildTimeout : 0,
+    ).unref();
+  }
+
+  /**
+   * Attaches event handlers to the WebSocketShardManager from `@discordjs/ws`.
+   *
+   * @private
+   */
+  _attachEvents() {
+    this.ws.on(WebSocketShardEvents.Debug, (message, shardId) =>
+      this.emit(Events.Debug, `[WS => ${typeof shardId === 'number' ? `Shard ${shardId}` : 'Manager'}] ${message}`),
+    );
+    this.ws.on(WebSocketShardEvents.Dispatch, this._handlePacket.bind(this));
+
+    this.ws.on(WebSocketShardEvents.Ready, async data => {
+      for (const guild of data.guilds) {
+        this.expectedGuilds.add(guild.id);
+      }
+
+      this.status = Status.WaitingForGuilds;
+      await this._checkReady();
+    });
+
+    this.ws.on(WebSocketShardEvents.HeartbeatComplete, ({ heartbeatAt, latency }, shardId) => {
+      this.emit(Events.Debug, `[WS => Shard ${shardId}] Heartbeat acknowledged, latency of ${latency}ms.`);
+      this.lastPingTimestamps.set(shardId, heartbeatAt);
+      this.pings.set(shardId, latency);
+    });
+  }
+
+  /**
+   * Processes a packet and queues it if this WebSocketManager is not ready.
+   *
+   * @param {GatewayDispatchPayload} packet The packet to be handled
+   * @param {number} shardId The shardId that received this packet
+   * @private
+   */
+  async _handlePacket(packet, shardId) {
+    if (this.status !== Status.Ready && !BeforeReadyWhitelist.includes(packet.t)) {
+      this.incomingPacketQueue.push({ packet, shardId });
+    } else {
+      if (this.incomingPacketQueue.length) {
+        const item = this.incomingPacketQueue.shift();
+        setImmediate(async () => {
+          await this._handlePacket(item.packet, item.shardId);
+        }).unref();
+      }
+
+      if (PacketHandlers[packet.t]) {
+        PacketHandlers[packet.t](this, packet, shardId);
+      }
+
+      if (this.status === Status.WaitingForGuilds && WaitingForGuildEvents.includes(packet.t)) {
+        this.expectedGuilds.delete(packet.d.id);
+        await this._checkReady();
+      }
+    }
+  }
+
+  /**
+   * Broadcasts a packet to every shard of this client handles.
+   *
+   * @param {Object} packet The packet to send
+   * @private
+   */
+  async _broadcast(packet) {
+    const shardIds = await this.ws.getShardIds();
+    return Promise.all(shardIds.map(shardId => this.ws.send(shardId, packet)));
+  }
+
+  /**
+   * Causes the client to be marked as ready and emits the ready event.
+   *
+   * @private
+   */
+  _triggerClientReady() {
+    this.status = Status.Ready;
+
+    this.readyTimestamp = Date.now();
+
+    /**
+     * Emitted when the client becomes ready to start working.
+     *
+     * @event Client#clientReady
+     * @param {Client} client The client
+     */
+    this.emit(Events.ClientReady, this);
+  }
+
+  /**
    * Returns whether the client has logged in, indicative of being able to access
    * properties such as `user` and `application`.
+   *
    * @returns {boolean}
    */
   isReady() {
-    return this.ws.status === Status.READY;
+    return this.status === Status.Ready;
+  }
+
+  /**
+   * The average ping of all WebSocketShards
+   *
+   * @type {?number}
+   * @readonly
+   */
+  get ping() {
+    return this.pings.size ? this.pings.reduce((a, b) => a + b, 0) / this.pings.size : null;
   }
 
   /**
    * Logs out, terminates the connection to Discord, and destroys the client.
-   * @returns {void}
+   *
+   * @returns {Promise<void>}
    */
-  destroy() {
+  async destroy() {
     super.destroy();
 
-    for (const fn of this._cleanups) fn();
-    this._cleanups.clear();
-
-    if (this.sweepMessageInterval) clearInterval(this.sweepMessageInterval);
-
     this.sweepers.destroy();
-    this.ws.destroy();
+    await this.ws.destroy();
     this.token = null;
+    this.rest.setToken(null);
   }
 
   /**
    * Options used when fetching an invite from Discord.
+   *
    * @typedef {Object} ClientFetchInviteOptions
    * @property {Snowflake} [guildScheduledEventId] The id of the guild scheduled event to include with
    * the invite
@@ -290,6 +464,7 @@ class Client extends BaseClient {
 
   /**
    * Obtains an invite from Discord.
+   *
    * @param {InviteResolvable} invite Invite code or URL
    * @param {ClientFetchInviteOptions} [options] Options for fetching the invite
    * @returns {Promise<Invite>}
@@ -299,15 +474,18 @@ class Client extends BaseClient {
    *   .catch(console.error);
    */
   async fetchInvite(invite, options) {
-    const code = DataResolver.resolveInviteCode(invite);
-    const data = await this.api.invites(code).get({
-      query: { with_counts: true, with_expiration: true, guild_scheduled_event_id: options?.guildScheduledEventId },
+    const code = resolveInviteCode(invite);
+    const query = makeURLSearchParams({
+      with_counts: true,
+      guild_scheduled_event_id: options?.guildScheduledEventId,
     });
+    const data = await this.rest.get(Routes.invite(code), { query });
     return new Invite(this, data);
   }
 
   /**
    * Obtains a template from Discord.
+   *
    * @param {GuildTemplateResolvable} template Template code or URL
    * @returns {Promise<GuildTemplate>}
    * @example
@@ -316,13 +494,14 @@ class Client extends BaseClient {
    *   .catch(console.error);
    */
   async fetchGuildTemplate(template) {
-    const code = DataResolver.resolveGuildTemplateCode(template);
-    const data = await this.api.guilds.templates(code).get();
+    const code = resolveGuildTemplateCode(template);
+    const data = await this.rest.get(Routes.template(code));
     return new GuildTemplate(this, data);
   }
 
   /**
    * Obtains a webhook from Discord.
+   *
    * @param {Snowflake} id The webhook's id
    * @param {string} [token] Token for the webhook
    * @returns {Promise<Webhook>}
@@ -332,12 +511,13 @@ class Client extends BaseClient {
    *   .catch(console.error);
    */
   async fetchWebhook(id, token) {
-    const data = await this.api.webhooks(id, token).get();
+    const data = await this.rest.get(Routes.webhook(id, token), { auth: token === undefined });
     return new Webhook(this, { token, ...data });
   }
 
   /**
    * Obtains the available voice regions from Discord.
+   *
    * @returns {Promise<Collection<string, VoiceRegion>>}
    * @example
    * client.fetchVoiceRegions()
@@ -345,7 +525,7 @@ class Client extends BaseClient {
    *   .catch(console.error);
    */
   async fetchVoiceRegions() {
-    const apiRegions = await this.api.voice.regions.get();
+    const apiRegions = await this.rest.get(Routes.voiceRegions());
     const regions = new Collection();
     for (const region of apiRegions) regions.set(region.id, new VoiceRegion(region));
     return regions;
@@ -353,6 +533,7 @@ class Client extends BaseClient {
 
   /**
    * Obtains a sticker from Discord.
+   *
    * @param {Snowflake} id The sticker's id
    * @returns {Promise<Sticker>}
    * @example
@@ -361,95 +542,87 @@ class Client extends BaseClient {
    *   .catch(console.error);
    */
   async fetchSticker(id) {
-    const data = await this.api.stickers(id).get();
+    const data = await this.rest.get(Routes.sticker(id));
     return new Sticker(this, data);
   }
 
   /**
-   * Obtains the list of sticker packs available to Nitro subscribers from Discord.
-   * @returns {Promise<Collection<Snowflake, StickerPack>>}
+   * Options for fetching sticker packs.
+   *
+   * @typedef {Object} StickerPackFetchOptions
+   * @property {Snowflake} [packId] The id of the sticker pack to fetch
+   */
+
+  /**
+   * Obtains the list of available sticker packs.
+   *
+   * @param {StickerPackFetchOptions} [options={}] Options for fetching sticker packs
+   * @returns {Promise<Collection<Snowflake, StickerPack>|StickerPack>}
+   * A collection of sticker packs, or a single sticker pack if a packId was provided
    * @example
-   * client.fetchPremiumStickerPacks()
+   * client.fetchStickerPacks()
    *   .then(packs => console.log(`Available sticker packs are: ${packs.map(pack => pack.name).join(', ')}`))
    *   .catch(console.error);
-   */
-  async fetchPremiumStickerPacks() {
-    const data = await this.api('sticker-packs').get();
-    return new Collection(data.sticker_packs.map(p => [p.id, new StickerPack(this, p)]));
-  }
-  /**
-   * A last ditch cleanup function for garbage collection.
-   * @param {Function} options.cleanup The function called to GC
-   * @param {string} [options.message] The message to send after a successful GC
-   * @param {string} [options.name] The name of the item being GCed
-   * @private
-   */
-  _finalize({ cleanup, message, name }) {
-    try {
-      cleanup();
-      this._cleanups.delete(cleanup);
-      if (message) {
-        this.emit(Events.DEBUG, message);
-      }
-    } catch {
-      this.emit(Events.DEBUG, `Garbage collection failed on ${name ?? 'an unknown item'}.`);
-    }
-  }
-
-  /**
-   * Sweeps all text-based channels' messages and removes the ones older than the max message lifetime.
-   * If the message has been edited, the time of the edit is used rather than the time of the original message.
-   * @param {number} [lifetime=this.options.messageCacheLifetime] Messages that are older than this (in seconds)
-   * will be removed from the caches. The default is based on {@link ClientOptions#messageCacheLifetime}
-   * @returns {number} Amount of messages that were removed from the caches,
-   * or -1 if the message cache lifetime is unlimited
    * @example
-   * // Remove all messages older than 1800 seconds from the messages cache
-   * const amount = client.sweepMessages(1800);
-   * console.log(`Successfully removed ${amount} messages from the cache.`);
+   * client.fetchStickerPacks({ packId: '751604115435421716' })
+   *   .then(pack => console.log(`Sticker pack name: ${pack.name}`))
+   *   .catch(console.error);
    */
-  sweepMessages(lifetime = this.options.messageCacheLifetime) {
-    if (typeof lifetime !== 'number' || isNaN(lifetime)) {
-      throw new TypeError('INVALID_TYPE', 'lifetime', 'number');
-    }
-    if (lifetime <= 0) {
-      this.emit(Events.DEBUG, "Didn't sweep messages - lifetime is unlimited");
-      return -1;
+  async fetchStickerPacks({ packId } = {}) {
+    if (packId) {
+      const innerData = await this.rest.get(Routes.stickerPack(packId));
+      return new StickerPack(this, innerData);
     }
 
-    const messages = this.sweepers.sweepMessages(Sweepers.outdatedMessageSweepFilter(lifetime)());
-    this.emit(Events.DEBUG, `Swept ${messages} messages older than ${lifetime} seconds`);
-    return messages;
+    const data = await this.rest.get(Routes.stickerPacks());
+    return new Collection(data.sticker_packs.map(stickerPack => [stickerPack.id, new StickerPack(this, stickerPack)]));
+  }
+
+  /**
+   * Obtains the list of default soundboard sounds.
+   *
+   * @returns {Promise<Collection<string, SoundboardSound>>}
+   * @example
+   * client.fetchDefaultSoundboardSounds()
+   *  .then(sounds => console.log(`Available soundboard sounds are: ${sounds.map(sound => sound.name).join(', ')}`))
+   *  .catch(console.error);
+   */
+  async fetchDefaultSoundboardSounds() {
+    const data = await this.rest.get(Routes.soundboardDefaultSounds());
+    return new Collection(data.map(sound => [sound.sound_id, new SoundboardSound(this, sound)]));
   }
 
   /**
    * Obtains a guild preview from Discord, available for all guilds the bot is in and all Discoverable guilds.
+   *
    * @param {GuildResolvable} guild The guild to fetch the preview for
    * @returns {Promise<GuildPreview>}
    */
   async fetchGuildPreview(guild) {
     const id = this.guilds.resolveId(guild);
-    if (!id) throw new TypeError('INVALID_TYPE', 'guild', 'GuildResolvable');
-    const data = await this.api.guilds(id).preview.get();
+    if (!id) throw new DiscordjsTypeError(ErrorCodes.InvalidType, 'guild', 'GuildResolvable');
+    const data = await this.rest.get(Routes.guildPreview(id));
     return new GuildPreview(this, data);
   }
 
   /**
    * Obtains the widget data of a guild from Discord, available for guilds with the widget enabled.
+   *
    * @param {GuildResolvable} guild The guild to fetch the widget data for
    * @returns {Promise<Widget>}
    */
   async fetchGuildWidget(guild) {
     const id = this.guilds.resolveId(guild);
-    if (!id) throw new TypeError('INVALID_TYPE', 'guild', 'GuildResolvable');
-    const data = await this.api.guilds(id, 'widget.json').get();
+    if (!id) throw new DiscordjsTypeError(ErrorCodes.InvalidType, 'guild', 'GuildResolvable');
+    const data = await this.rest.get(Routes.guildWidgetJSON(id));
     return new Widget(this, data);
   }
 
   /**
    * Options for {@link Client#generateInvite}.
+   *
    * @typedef {Object} InviteGenerationOptions
-   * @property {InviteScope[]} scopes Scopes that should be requested
+   * @property {OAuth2Scopes[]} scopes Scopes that should be requested
    * @property {PermissionResolvable} [permissions] Permissions to request
    * @property {GuildResolvable} [guild] Guild to preselect
    * @property {boolean} [disableGuildSelect] Whether to disable the guild selection
@@ -457,161 +630,229 @@ class Client extends BaseClient {
 
   /**
    * Generates a link that can be used to invite the bot to a guild.
+   *
    * @param {InviteGenerationOptions} [options={}] Options for the invite
    * @returns {string}
    * @example
    * const link = client.generateInvite({
-   *   scopes: ['applications.commands'],
+   *   scopes: [OAuth2Scopes.ApplicationsCommands],
    * });
    * console.log(`Generated application invite link: ${link}`);
    * @example
    * const link = client.generateInvite({
    *   permissions: [
-   *     Permissions.FLAGS.SEND_MESSAGES,
-   *     Permissions.FLAGS.MANAGE_GUILD,
-   *     Permissions.FLAGS.MENTION_EVERYONE,
+   *     PermissionFlagsBits.SendMessages,
+   *     PermissionFlagsBits.ManageGuild,
+   *     PermissionFlagsBits.MentionEveryone,
    *   ],
-   *   scopes: ['bot'],
+   *   scopes: [OAuth2Scopes.Bot],
    * });
    * console.log(`Generated bot invite link: ${link}`);
    */
   generateInvite(options = {}) {
-    if (typeof options !== 'object') throw new TypeError('INVALID_TYPE', 'options', 'object', true);
-    if (!this.application) throw new Error('CLIENT_NOT_READY', 'generate an invite link');
-
-    const query = new URLSearchParams({
-      client_id: this.application.id,
-    });
+    if (typeof options !== 'object') throw new DiscordjsTypeError(ErrorCodes.InvalidType, 'options', 'object', true);
+    if (!this.application) throw new DiscordjsError(ErrorCodes.ClientNotReady, 'generate an invite link');
 
     const { scopes } = options;
-    if (typeof scopes === 'undefined') {
-      throw new TypeError('INVITE_MISSING_SCOPES');
+    if (scopes === undefined) {
+      throw new DiscordjsTypeError(ErrorCodes.InvalidMissingScopes);
     }
+
     if (!Array.isArray(scopes)) {
-      throw new TypeError('INVALID_TYPE', 'scopes', 'Array of Invite Scopes', true);
+      throw new DiscordjsTypeError(ErrorCodes.InvalidType, 'scopes', 'Array of Invite Scopes', true);
     }
-    if (!scopes.some(scope => ['bot', 'applications.commands'].includes(scope))) {
-      throw new TypeError('INVITE_MISSING_SCOPES');
+
+    if (!scopes.some(scope => [OAuth2Scopes.Bot, OAuth2Scopes.ApplicationsCommands].includes(scope))) {
+      throw new DiscordjsTypeError(ErrorCodes.InvalidMissingScopes);
     }
-    const invalidScope = scopes.find(scope => !InviteScopes.includes(scope));
+
+    if (!scopes.includes(OAuth2Scopes.Bot) && options.permissions) {
+      throw new DiscordjsTypeError(ErrorCodes.InvalidScopesWithPermissions);
+    }
+
+    const validScopes = Object.values(OAuth2Scopes);
+    const invalidScope = scopes.find(scope => !validScopes.includes(scope));
     if (invalidScope) {
-      throw new TypeError('INVALID_ELEMENT', 'Array', 'scopes', invalidScope);
+      throw new DiscordjsTypeError(ErrorCodes.InvalidElement, 'Array', 'scopes', invalidScope);
     }
-    query.set('scope', scopes.join(' '));
+
+    const query = makeURLSearchParams({
+      client_id: this.application.id,
+      scope: scopes.join(' '),
+      disable_guild_select: options.disableGuildSelect,
+    });
 
     if (options.permissions) {
-      const permissions = Permissions.resolve(options.permissions);
-      if (permissions) query.set('permissions', permissions);
-    }
-
-    if (options.disableGuildSelect) {
-      query.set('disable_guild_select', true);
+      const permissions = PermissionsBitField.resolve(options.permissions);
+      if (permissions) query.set('permissions', permissions.toString());
     }
 
     if (options.guild) {
       const guildId = this.guilds.resolveId(options.guild);
-      if (!guildId) throw new TypeError('INVALID_TYPE', 'options.guild', 'GuildResolvable');
+      if (!guildId) throw new DiscordjsTypeError(ErrorCodes.InvalidType, 'options.guild', 'GuildResolvable');
       query.set('guild_id', guildId);
     }
 
-    return `${this.options.http.api}${this.api.oauth2.authorize}?${query}`;
+    return `${this.options.rest.api}${Routes.oauth2Authorization()}?${query}`;
   }
 
   toJSON() {
     return super.toJSON({
-      readyAt: false,
+      actions: false,
+      presence: false,
     });
   }
 
   /**
-   * Calls {@link https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/eval} on a script
+   * Partially censored client token for debug logging purposes.
+   *
+   * @type {?string}
+   * @readonly
+   * @private
+   */
+  get _censoredToken() {
+    if (!this.token) return null;
+
+    return this.token
+      .split('.')
+      .map((val, index) => (index > 1 ? val.replaceAll(/./g, '*') : val))
+      .join('.');
+  }
+
+  /**
+   * Calls {@link https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/eval} on a script
    * with the client as `this`.
+   *
    * @param {string} script Script to eval
    * @returns {*}
    * @private
    */
   _eval(script) {
+    // eslint-disable-next-line no-eval
     return eval(script);
   }
 
   /**
    * Validates the client options.
+   *
    * @param {ClientOptions} [options=this.options] Options to validate
    * @private
    */
   _validateOptions(options = this.options) {
-    if (typeof options.intents === 'undefined') {
-      throw new TypeError('CLIENT_MISSING_INTENTS');
+    if (options.intents === undefined && options.ws?.intents === undefined) {
+      throw new DiscordjsTypeError(ErrorCodes.ClientMissingIntents);
     } else {
-      options.intents = Intents.resolve(options.intents);
+      options.intents = new IntentsBitField(options.intents ?? options.ws.intents).freeze();
     }
-    if (typeof options.shardCount !== 'number' || isNaN(options.shardCount) || options.shardCount < 1) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'shardCount', 'a number greater than or equal to 1');
-    }
-    if (options.shards && !(options.shards === 'auto' || Array.isArray(options.shards))) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'shards', "'auto', a number or array of numbers");
-    }
-    if (options.shards && !options.shards.length) throw new RangeError('CLIENT_INVALID_PROVIDED_SHARDS');
-    if (typeof options.makeCache !== 'function') {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'makeCache', 'a function');
-    }
-    if (typeof options.messageCacheLifetime !== 'number' || isNaN(options.messageCacheLifetime)) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'The messageCacheLifetime', 'a number');
-    }
-    if (typeof options.messageSweepInterval !== 'number' || isNaN(options.messageSweepInterval)) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'messageSweepInterval', 'a number');
-    }
+
     if (typeof options.sweepers !== 'object' || options.sweepers === null) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'sweepers', 'an object');
+      throw new DiscordjsTypeError(ErrorCodes.ClientInvalidOption, 'sweepers', 'an object');
     }
-    if (typeof options.invalidRequestWarningInterval !== 'number' || isNaN(options.invalidRequestWarningInterval)) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'invalidRequestWarningInterval', 'a number');
-    }
+
     if (!Array.isArray(options.partials)) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'partials', 'an Array');
+      throw new DiscordjsTypeError(ErrorCodes.ClientInvalidOption, 'partials', 'an Array');
     }
-    if (typeof options.waitGuildTimeout !== 'number' || isNaN(options.waitGuildTimeout)) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'waitGuildTimeout', 'a number');
+
+    if (typeof options.waitGuildTimeout !== 'number' || Number.isNaN(options.waitGuildTimeout)) {
+      throw new DiscordjsTypeError(ErrorCodes.ClientInvalidOption, 'waitGuildTimeout', 'a number');
     }
-    if (typeof options.restWsBridgeTimeout !== 'number' || isNaN(options.restWsBridgeTimeout)) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'restWsBridgeTimeout', 'a number');
-    }
-    if (typeof options.restRequestTimeout !== 'number' || isNaN(options.restRequestTimeout)) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'restRequestTimeout', 'a number');
-    }
-    if (typeof options.restGlobalRateLimit !== 'number' || isNaN(options.restGlobalRateLimit)) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'restGlobalRateLimit', 'a number');
-    }
-    if (typeof options.restSweepInterval !== 'number' || isNaN(options.restSweepInterval)) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'restSweepInterval', 'a number');
-    }
-    if (typeof options.retryLimit !== 'number' || isNaN(options.retryLimit)) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'retryLimit', 'a number');
-    }
+
     if (typeof options.failIfNotExists !== 'boolean') {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'failIfNotExists', 'a boolean');
+      throw new DiscordjsTypeError(ErrorCodes.ClientInvalidOption, 'failIfNotExists', 'a boolean');
     }
-    if (!Array.isArray(options.userAgentSuffix)) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'userAgentSuffix', 'an array of strings');
+
+    if (typeof options.enforceNonce !== 'boolean') {
+      throw new DiscordjsTypeError(ErrorCodes.ClientInvalidOption, 'enforceNonce', 'a boolean');
     }
+
     if (
-      typeof options.rejectOnRateLimit !== 'undefined' &&
-      !(typeof options.rejectOnRateLimit === 'function' || Array.isArray(options.rejectOnRateLimit))
+      (typeof options.allowedMentions !== 'object' && options.allowedMentions !== undefined) ||
+      options.allowedMentions === null
     ) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'rejectOnRateLimit', 'an array or a function');
+      throw new DiscordjsTypeError(ErrorCodes.ClientInvalidOption, 'allowedMentions', 'an object');
+    }
+
+    if (typeof options.ws !== 'object' || options.ws === null) {
+      throw new DiscordjsTypeError(ErrorCodes.ClientInvalidOption, 'ws', 'an object');
+    }
+
+    if (
+      (typeof options.presence !== 'object' || options.presence === null) &&
+      options.ws.initialPresence === undefined
+    ) {
+      throw new DiscordjsTypeError(ErrorCodes.ClientInvalidOption, 'presence', 'an object');
+    } else {
+      options.ws.initialPresence = options.ws.initialPresence ?? this.presence._parse(this.options.presence);
+    }
+
+    if (typeof options.rest !== 'object' || options.rest === null) {
+      throw new DiscordjsTypeError(ErrorCodes.ClientInvalidOption, 'rest', 'an object');
+    }
+
+    if (typeof options.jsonTransformer !== 'function') {
+      throw new DiscordjsTypeError(ErrorCodes.ClientInvalidOption, 'jsonTransformer', 'a function');
     }
   }
 }
 
-module.exports = Client;
+exports.Client = Client;
+
+/**
+ * @class SnowflakeUtil
+ * @classdesc This class is an alias for {@link https://www.npmjs.com/package/@sapphire/snowflake @sapphire/snowflake}'s
+ * `DiscordSnowflake` class.
+ *
+ * Check their documentation
+ * {@link https://www.sapphirejs.dev/docs/Documentation/api-utilities/classes/sapphire_snowflake.Snowflake here}
+ * ({@link https://www.sapphirejs.dev/docs/Guide/utilities/snowflake guide})
+ * to see what you can do.
+ * @hideconstructor
+ */
+
+/**
+ * A {@link https://docs.x.com/resources/fundamentals/x-ids Twitter snowflake},
+ * except the epoch is 2015-01-01T00:00:00.000Z.
+ *
+ * If we have a snowflake '266241948824764416' we can represent it as binary:
+ * ```
+ * 64                                          22     17     12          0
+ *  000000111011000111100001101001000101000000  00001  00000  000000000000
+ *  number of milliseconds since Discord epoch  worker  pid    increment
+ * ```
+ *
+ * @typedef {string} Snowflake
+ */
+
+/**
+ * Emitted for general debugging information.
+ *
+ * @event Client#debug
+ * @param {string} info The debug information
+ */
 
 /**
  * Emitted for general warnings.
+ *
  * @event Client#warn
  * @param {string} info The warning
  */
 
 /**
  * @external Collection
- * @see {@link https://discord.js.org/#/docs/collection/main/class/Collection}
+ * @see {@link https://discord.js.org/docs/packages/collection/stable/Collection:Class}
+ */
+
+/**
+ * @external ImageURLOptions
+ * @see {@link https://discord.js.org/docs/packages/rest/stable/ImageURLOptions:Interface}
+ */
+
+/**
+ * @external EmojiURLOptions
+ * @see {@link https://discord.js.org/docs/packages/rest/stable/EmojiURLOptions:TypeAlias}
+ */
+
+/**
+ * @external BaseImageURLOptions
+ * @see {@link https://discord.js.org/docs/packages/rest/stable/BaseImageURLOptions:Interface}
  */
