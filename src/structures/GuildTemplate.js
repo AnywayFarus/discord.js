@@ -1,14 +1,26 @@
 'use strict';
 
-const Base = require('./Base');
-const { Events } = require('../util/Constants');
-const DataResolver = require('../util/DataResolver');
+const { setTimeout, clearTimeout } = require('node:timers');
+const { RouteBases, Routes } = require('discord-api-types/v10');
+const { resolveImage } = require('../util/DataResolver.js');
+const { Events } = require('../util/Events.js');
+const { Base } = require('./Base.js');
 
 /**
  * Represents the template for a guild.
+ *
  * @extends {Base}
  */
 class GuildTemplate extends Base {
+  /**
+   * A regular expression that matches guild template links.
+   * The `code` group property is present on the `exec()` result of this expression.
+   *
+   * @type {RegExp}
+   * @memberof GuildTemplate
+   */
+  static GuildTemplatesPattern = /discord(?:app)?\.(?:com\/template|new)\/(?<code>[\w-]{2,255})/i;
+
   constructor(client, data) {
     super(client);
     this._patch(data);
@@ -18,6 +30,7 @@ class GuildTemplate extends Base {
     if ('code' in data) {
       /**
        * The unique code of this template
+       *
        * @type {string}
        */
       this.code = data.code;
@@ -26,6 +39,7 @@ class GuildTemplate extends Base {
     if ('name' in data) {
       /**
        * The name of this template
+       *
        * @type {string}
        */
       this.name = data.name;
@@ -34,6 +48,7 @@ class GuildTemplate extends Base {
     if ('description' in data) {
       /**
        * The description of this template
+       *
        * @type {?string}
        */
       this.description = data.description;
@@ -42,6 +57,7 @@ class GuildTemplate extends Base {
     if ('usage_count' in data) {
       /**
        * The amount of times this template has been used
+       *
        * @type {number}
        */
       this.usageCount = data.usage_count;
@@ -50,6 +66,7 @@ class GuildTemplate extends Base {
     if ('creator_id' in data) {
       /**
        * The id of the user that created this template
+       *
        * @type {Snowflake}
        */
       this.creatorId = data.creator_id;
@@ -58,6 +75,7 @@ class GuildTemplate extends Base {
     if ('creator' in data) {
       /**
        * The user that created this template
+       *
        * @type {User}
        */
       this.creator = this.client.users._add(data.creator);
@@ -65,23 +83,26 @@ class GuildTemplate extends Base {
 
     if ('created_at' in data) {
       /**
-       * The time when this template was created at
-       * @type {Date}
+       * The timestamp of when this template was created at
+       *
+       * @type {number}
        */
-      this.createdAt = new Date(data.created_at);
+      this.createdTimestamp = Date.parse(data.created_at);
     }
 
     if ('updated_at' in data) {
       /**
-       * The time when this template was last synced to the guild
-       * @type {Date}
+       * The timestamp of when this template was last synced to the guild
+       *
+       * @type {number}
        */
-      this.updatedAt = new Date(data.updated_at);
+      this.updatedTimestamp = Date.parse(data.updated_at);
     }
 
     if ('source_guild_id' in data) {
       /**
        * The id of the guild that this template belongs to
+       *
        * @type {Snowflake}
        */
       this.guildId = data.source_guild_id;
@@ -90,6 +111,7 @@ class GuildTemplate extends Base {
     if ('serialized_source_guild' in data) {
       /**
        * The data of the guild that this template would create
+       *
        * @type {APIGuild}
        */
       this.serializedGuild = data.serialized_source_guild;
@@ -97,6 +119,7 @@ class GuildTemplate extends Base {
 
     /**
      * Whether this template has unsynced changes
+     *
      * @type {?boolean}
      */
     this.unSynced = 'is_dirty' in data ? Boolean(data.is_dirty) : null;
@@ -107,97 +130,107 @@ class GuildTemplate extends Base {
   /**
    * Creates a guild based on this template.
    * <warn>This is only available to bots in fewer than 10 guilds.</warn>
+   *
    * @param {string} name The name of the guild
    * @param {BufferResolvable|Base64Resolvable} [icon] The icon for the guild
    * @returns {Promise<Guild>}
    */
   async createGuild(name, icon) {
     const { client } = this;
-    const data = await client.api.guilds.templates(this.code).post({
-      data: {
+    const data = await client.rest.post(Routes.template(this.code), {
+      body: {
         name,
-        icon: await DataResolver.resolveImage(icon),
+        icon: await resolveImage(icon),
       },
     });
 
     if (client.guilds.cache.has(data.id)) return client.guilds.cache.get(data.id);
 
     return new Promise(resolve => {
-      const resolveGuild = guild => {
-        client.off(Events.GUILD_CREATE, handleGuild);
+      function resolveGuild(guild) {
+        client.off(Events.GuildCreate, handleGuild);
         client.decrementMaxListeners();
         resolve(guild);
-      };
+      }
 
-      const handleGuild = guild => {
+      client.incrementMaxListeners();
+      client.on(Events.GuildCreate, handleGuild);
+
+      const timeout = setTimeout(() => resolveGuild(client.guilds._add(data)), 10_000).unref();
+
+      function handleGuild(guild) {
         if (guild.id === data.id) {
           clearTimeout(timeout);
           resolveGuild(guild);
         }
-      };
-
-      client.incrementMaxListeners();
-      client.on(Events.GUILD_CREATE, handleGuild);
-
-      const timeout = setTimeout(() => resolveGuild(client.guilds._add(data)), 10_000);
+      }
     });
   }
 
   /**
    * Options used to edit a guild template.
-   * @typedef {Object} EditGuildTemplateOptions
+   *
+   * @typedef {Object} GuildTemplateEditOptions
    * @property {string} [name] The name of this template
    * @property {string} [description] The description of this template
    */
 
   /**
    * Updates the metadata of this template.
-   * @param {EditGuildTemplateOptions} [options] Options for editing the template
+   *
+   * @param {GuildTemplateEditOptions} [options] Options for editing the template
    * @returns {Promise<GuildTemplate>}
    */
   async edit({ name, description } = {}) {
-    const data = await this.client.api.guilds(this.guildId).templates(this.code).patch({ data: { name, description } });
+    const data = await this.client.rest.patch(Routes.guildTemplate(this.guildId, this.code), {
+      body: { name, description },
+    });
     return this._patch(data);
   }
 
   /**
    * Deletes this template.
+   *
    * @returns {Promise<GuildTemplate>}
    */
   async delete() {
-    await this.client.api.guilds(this.guildId).templates(this.code).delete();
+    await this.client.rest.delete(Routes.guildTemplate(this.guildId, this.code));
     return this;
   }
 
   /**
    * Syncs this template to the current state of the guild.
+   *
    * @returns {Promise<GuildTemplate>}
    */
   async sync() {
-    const data = await this.client.api.guilds(this.guildId).templates(this.code).put();
+    const data = await this.client.rest.put(Routes.guildTemplate(this.guildId, this.code));
     return this._patch(data);
   }
 
   /**
-   * The timestamp of when this template was created at
-   * @type {number}
+   * The time when this template was created at
+   *
+   * @type {Date}
    * @readonly
    */
-  get createdTimestamp() {
-    return this.createdAt.getTime();
+  get createdAt() {
+    return new Date(this.createdTimestamp);
   }
 
   /**
-   * The timestamp of when this template was last synced to the guild
-   * @type {number}
+   * The time when this template was last synced to the guild
+   *
+   * @type {Date}
    * @readonly
    */
-  get updatedTimestamp() {
-    return this.updatedAt.getTime();
+  get updatedAt() {
+    return new Date(this.updatedTimestamp);
   }
 
   /**
    * The guild that this template belongs to
+   *
    * @type {?Guild}
    * @readonly
    */
@@ -207,15 +240,17 @@ class GuildTemplate extends Base {
 
   /**
    * The URL of this template
+   *
    * @type {string}
    * @readonly
    */
   get url() {
-    return `${this.client.options.http.template}/${this.code}`;
+    return `${RouteBases.template}/${this.code}`;
   }
 
   /**
    * When concatenated with a string, this automatically returns the template's code instead of the template object.
+   *
    * @returns {string}
    * @example
    * // Logs: Template: FKvmczH2HyUf
@@ -226,10 +261,4 @@ class GuildTemplate extends Base {
   }
 }
 
-/**
- * Regular expression that globally matches guild template links
- * @type {RegExp}
- */
-GuildTemplate.GUILD_TEMPLATES_PATTERN = /discord(?:app)?\.(?:com\/template|new)\/([\w-]{2,255})/gi;
-
-module.exports = GuildTemplate;
+exports.GuildTemplate = GuildTemplate;

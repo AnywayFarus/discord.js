@@ -1,37 +1,41 @@
+/* eslint-disable no-use-before-define */
 'use strict';
 
-const Base = require('./Base');
-const { Emoji } = require('./Emoji');
-const ActivityFlags = require('../util/ActivityFlags');
-const { ActivityTypes } = require('../util/Constants');
-const Util = require('../util/Util');
+const { ActivityFlagsBitField } = require('../util/ActivityFlagsBitField.js');
+const { flatten } = require('../util/Util.js');
+const { Base } = require('./Base.js');
+const { Emoji } = require('./Emoji.js');
 
 /**
  * Activity sent in a message.
+ *
  * @typedef {Object} MessageActivity
  * @property {string} [partyId] Id of the party represented in activity
- * @property {number} [type] Type of activity sent
+ * @property {MessageActivityType} type Type of activity sent
  */
 
 /**
  * The status of this presence:
- * * **`online`** - user is online
- * * **`idle`** - user is AFK
- * * **`offline`** - user is offline or invisible
- * * **`dnd`** - user is in Do Not Disturb
+ * - `online` - user is online
+ * - `idle` - user is AFK
+ * - `offline` - user is offline or invisible
+ * - `dnd` - user is in Do Not Disturb
+ *
  * @typedef {string} PresenceStatus
  */
 
 /**
  * The status of this presence:
- * * **`online`** - user is online
- * * **`idle`** - user is AFK
- * * **`dnd`** - user is in Do Not Disturb
+ * - `online` - user is online
+ * - `idle` - user is AFK
+ * - `dnd` - user is in Do Not Disturb
+ *
  * @typedef {string} ClientPresenceStatus
  */
 
 /**
  * Represents a user's presence.
+ *
  * @extends {Base}
  */
 class Presence extends Base {
@@ -40,12 +44,14 @@ class Presence extends Base {
 
     /**
      * The presence's user id
+     *
      * @type {Snowflake}
      */
     this.userId = data.user.id;
 
     /**
      * The guild this presence is in
+     *
      * @type {?Guild}
      */
     this.guild = data.guild ?? null;
@@ -55,6 +61,7 @@ class Presence extends Base {
 
   /**
    * The user of this presence
+   *
    * @type {?User}
    * @readonly
    */
@@ -64,6 +71,7 @@ class Presence extends Base {
 
   /**
    * The member of this presence
+   *
    * @type {?GuildMember}
    * @readonly
    */
@@ -75,6 +83,7 @@ class Presence extends Base {
     if ('status' in data) {
       /**
        * The status of this presence
+       *
        * @type {PresenceStatus}
        */
       this.status = data.status;
@@ -85,6 +94,7 @@ class Presence extends Base {
     if ('activities' in data) {
       /**
        * The activities of this presence
+       *
        * @type {Activity[]}
        */
       this.activities = data.activities.map(activity => new Activity(this, activity));
@@ -94,11 +104,16 @@ class Presence extends Base {
 
     if ('client_status' in data) {
       /**
-       * The devices this presence is on
-       * @type {?Object}
+       * @typedef {Object} ClientPresenceStatusData
        * @property {?ClientPresenceStatus} web The current presence in the web application
        * @property {?ClientPresenceStatus} mobile The current presence in the mobile application
        * @property {?ClientPresenceStatus} desktop The current presence in the desktop application
+       */
+
+      /**
+       * The devices this presence is on
+       *
+       * @type {?ClientPresenceStatusData}
        */
       this.clientStatus = data.client_status;
     } else {
@@ -116,6 +131,7 @@ class Presence extends Base {
 
   /**
    * Whether this presence is equal to another.
+   *
    * @param {Presence} presence The presence to compare with
    * @returns {boolean}
    */
@@ -124,78 +140,78 @@ class Presence extends Base {
       this === presence ||
       (presence &&
         this.status === presence.status &&
-        this.activities.length === presence.activities.length &&
-        this.activities.every((activity, index) => activity.equals(presence.activities[index])) &&
         this.clientStatus?.web === presence.clientStatus?.web &&
         this.clientStatus?.mobile === presence.clientStatus?.mobile &&
-        this.clientStatus?.desktop === presence.clientStatus?.desktop)
+        this.clientStatus?.desktop === presence.clientStatus?.desktop &&
+        this.activities.length === presence.activities.length &&
+        this.activities.every((activity, index) => activity.equals(presence.activities[index])))
     );
   }
 
   toJSON() {
-    return Util.flatten(this);
+    return flatten(this);
   }
 }
-
-/**
- * The platform of this activity:
- * * **`desktop`**
- * * **`samsung`** - playing on Samsung Galaxy
- * * **`xbox`** - playing on Xbox Live
- * @typedef {string} ActivityPlatform
- */
 
 /**
  * Represents an activity that is part of a user's presence.
  */
 class Activity {
   constructor(presence, data) {
+    /**
+     * The presence of the Activity
+     *
+     * @type {Presence}
+     * @readonly
+     * @name Activity#presence
+     */
     Object.defineProperty(this, 'presence', { value: presence });
 
     /**
-     * The activity's id
-     * @type {string}
-     */
-    this.id = data.id;
-
-    /**
      * The activity's name
+     *
      * @type {string}
      */
     this.name = data.name;
 
     /**
      * The activity status's type
+     *
      * @type {ActivityType}
      */
-    this.type = typeof data.type === 'number' ? ActivityTypes[data.type] : data.type;
+    this.type = data.type;
 
     /**
      * If the activity is being streamed, a link to the stream
+     *
      * @type {?string}
      */
     this.url = data.url ?? null;
 
     /**
      * Details about the activity
+     *
      * @type {?string}
      */
     this.details = data.details ?? null;
 
     /**
      * State of the activity
+     *
      * @type {?string}
      */
     this.state = data.state ?? null;
 
     /**
      * The id of the application associated with this activity
+     *
      * @type {?Snowflake}
      */
     this.applicationId = data.application_id ?? null;
 
     /**
      * Represents timestamps of an activity
+     *
      * @typedef {Object} ActivityTimestamps
      * @property {?Date} start When the activity started
      * @property {?Date} end When the activity will end
@@ -203,6 +219,7 @@ class Activity {
 
     /**
      * Timestamps for the activity
+     *
      * @type {?ActivityTimestamps}
      */
     this.timestamps = data.timestamps
@@ -213,19 +230,8 @@ class Activity {
       : null;
 
     /**
-     * The Spotify song's id
-     * @type {?string}
-     */
-    this.syncId = data.sync_id ?? null;
-
-    /**
-     * The platform the game is being played on
-     * @type {?ActivityPlatform}
-     */
-    this.platform = data.platform ?? null;
-
-    /**
      * Represents a party of an activity
+     *
      * @typedef {Object} ActivityParty
      * @property {?string} id The party's id
      * @property {number[]} size Size of the party as `[current, max]`
@@ -233,49 +239,58 @@ class Activity {
 
     /**
      * Party of the activity
+     *
      * @type {?ActivityParty}
      */
     this.party = data.party ?? null;
 
     /**
+     * The sync id of the activity
+     * <info>This property is not documented by Discord and represents the track id in spotify activities.</info>
+     *
+     * @type {?string}
+     */
+    this.syncId = data.sync_id ?? null;
+
+    /**
      * Assets for rich presence
+     *
      * @type {?RichPresenceAssets}
      */
     this.assets = data.assets ? new RichPresenceAssets(this, data.assets) : null;
 
     /**
      * Flags that describe the activity
-     * @type {Readonly<ActivityFlags>}
+     *
+     * @type {Readonly<ActivityFlagsBitField>}
      */
-    this.flags = new ActivityFlags(data.flags).freeze();
+    this.flags = new ActivityFlagsBitField(data.flags).freeze();
 
     /**
      * Emoji for a custom activity
+     *
      * @type {?Emoji}
      */
     this.emoji = data.emoji ? new Emoji(presence.client, data.emoji) : null;
 
     /**
-     * The game's or Spotify session's id
-     * @type {?string}
-     */
-    this.sessionId = data.session_id ?? null;
-
-    /**
      * The labels of the buttons of this rich presence
+     *
      * @type {string[]}
      */
     this.buttons = data.buttons ?? [];
 
     /**
      * Creation date of the activity
+     *
      * @type {number}
      */
-    this.createdTimestamp = new Date(data.created_at).getTime();
+    this.createdTimestamp = data.created_at;
   }
 
   /**
    * Whether this activity is equal to another activity.
+   *
    * @param {Activity} activity The activity to compare with
    * @returns {boolean}
    */
@@ -287,12 +302,15 @@ class Activity {
         this.type === activity.type &&
         this.url === activity.url &&
         this.state === activity.state &&
-        this.details === activity.details)
+        this.details === activity.details &&
+        this.emoji?.id === activity.emoji?.id &&
+        this.emoji?.name === activity.emoji?.name)
     );
   }
 
   /**
    * The time the activity was created at
+   *
    * @type {Date}
    * @readonly
    */
@@ -301,7 +319,8 @@ class Activity {
   }
 
   /**
-   * When concatenated with a string, this automatically returns the activities' name instead of the Activity object.
+   * When concatenated with a string, this automatically returns the activity's name instead of the Activity object.
+   *
    * @returns {string}
    */
   toString() {
@@ -318,28 +337,39 @@ class Activity {
  */
 class RichPresenceAssets {
   constructor(activity, assets) {
+    /**
+     * The activity of the RichPresenceAssets
+     *
+     * @type {Activity}
+     * @readonly
+     * @name RichPresenceAssets#activity
+     */
     Object.defineProperty(this, 'activity', { value: activity });
 
     /**
      * Hover text for the large image
+     *
      * @type {?string}
      */
     this.largeText = assets.large_text ?? null;
 
     /**
      * Hover text for the small image
+     *
      * @type {?string}
      */
     this.smallText = assets.small_text ?? null;
 
     /**
      * The large image asset's id
+     *
      * @type {?Snowflake}
      */
     this.largeImage = assets.large_image ?? null;
 
     /**
      * The small image asset's id
+     *
      * @type {?Snowflake}
      */
     this.smallImage = assets.small_image ?? null;
@@ -347,35 +377,50 @@ class RichPresenceAssets {
 
   /**
    * Gets the URL of the small image asset
-   * @param {StaticImageURLOptions} [options] Options for the image URL
+   *
+   * @param {ImageURLOptions} [options={}] Options for the image URL
    * @returns {?string}
    */
-  smallImageURL({ format, size } = {}) {
-    return (
-      this.smallImage &&
-      this.activity.presence.client.rest.cdn.AppAsset(this.activity.applicationId, this.smallImage, {
-        format,
-        size,
-      })
-    );
+  smallImageURL(options = {}) {
+    if (!this.smallImage) return null;
+    if (this.smallImage.includes(':')) {
+      const [platform, id] = this.smallImage.split(':');
+      switch (platform) {
+        case 'mp':
+          return `https://media.discordapp.net/${id}`;
+        default:
+          return null;
+      }
+    }
+
+    return this.activity.presence.client.rest.cdn.appAsset(this.activity.applicationId, this.smallImage, options);
   }
 
   /**
    * Gets the URL of the large image asset
-   * @param {StaticImageURLOptions} [options] Options for the image URL
+   *
+   * @param {ImageURLOptions} [options={}] Options for the image URL
    * @returns {?string}
    */
-  largeImageURL({ format, size } = {}) {
+  largeImageURL(options = {}) {
     if (!this.largeImage) return null;
-    if (/^spotify:/.test(this.largeImage)) {
-      return `https://i.scdn.co/image/${this.largeImage.slice(8)}`;
-    } else if (/^twitch:/.test(this.largeImage)) {
-      return `https://static-cdn.jtvnw.net/previews-ttv/live_user_${this.largeImage.slice(7)}.png`;
+    if (this.largeImage.includes(':')) {
+      const [platform, id] = this.largeImage.split(':');
+      switch (platform) {
+        case 'mp':
+          return `https://media.discordapp.net/${id}`;
+        case 'spotify':
+          return `https://i.scdn.co/image/${id}`;
+        case 'youtube':
+          return `https://i.ytimg.com/vi/${id}/hqdefault_live.jpg`;
+        case 'twitch':
+          return `https://static-cdn.jtvnw.net/previews-ttv/live_user_${id}.png`;
+        default:
+          return null;
+      }
     }
-    return this.activity.presence.client.rest.cdn.AppAsset(this.activity.applicationId, this.largeImage, {
-      format,
-      size,
-    });
+
+    return this.activity.presence.client.rest.cdn.appAsset(this.activity.applicationId, this.largeImage, options);
   }
 }
 

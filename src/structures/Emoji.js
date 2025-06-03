@@ -1,27 +1,12 @@
 'use strict';
 
-const process = require('node:process');
-const Base = require('./Base');
-const SnowflakeUtil = require('../util/SnowflakeUtil');
+const { formatEmoji } = require('@discordjs/formatters');
+const { DiscordSnowflake } = require('@sapphire/snowflake');
+const { Base } = require('./Base.js');
 
 /**
- * @type {WeakSet<Emoji>}
- * @private
- * @internal
- */
-const deletedEmojis = new WeakSet();
-let deprecationEmittedForDeleted = false;
-
-/**
- * Represents raw emoji data from the API
- * @typedef {APIEmoji} RawEmoji
- * @property {?Snowflake} id The emoji's id
- * @property {?string} name The emoji's name
- * @property {?boolean} animated Whether the emoji is animated
- */
-
-/**
- * Represents an emoji, see {@link GuildEmoji} and {@link ReactionEmoji}.
+ * Represents an emoji, see {@link ApplicationEmoji}, {@link GuildEmoji} and {@link ReactionEmoji}.
+ *
  * @extends {Base}
  */
 class Emoji extends Base {
@@ -29,55 +14,29 @@ class Emoji extends Base {
     super(client);
     /**
      * Whether or not the emoji is animated
+     *
      * @type {?boolean}
      */
     this.animated = emoji.animated ?? null;
 
     /**
      * The emoji's name
+     *
      * @type {?string}
      */
     this.name = emoji.name ?? null;
 
     /**
      * The emoji's id
+     *
      * @type {?Snowflake}
      */
-    this.id = emoji.id;
-  }
-
-  /**
-   * Whether or not the structure has been deleted
-   * @type {boolean}
-   * @deprecated This will be removed in the next major version, see https://github.com/discordjs/discord.js/issues/7091
-   */
-  get deleted() {
-    if (!deprecationEmittedForDeleted) {
-      deprecationEmittedForDeleted = true;
-      process.emitWarning(
-        'Emoji#deleted is deprecated, see https://github.com/discordjs/discord.js/issues/7091.',
-        'DeprecationWarning',
-      );
-    }
-
-    return deletedEmojis.has(this);
-  }
-
-  set deleted(value) {
-    if (!deprecationEmittedForDeleted) {
-      deprecationEmittedForDeleted = true;
-      process.emitWarning(
-        'Emoji#deleted is deprecated, see https://github.com/discordjs/discord.js/issues/7091.',
-        'DeprecationWarning',
-      );
-    }
-
-    if (value) deletedEmojis.add(this);
-    else deletedEmojis.delete(this);
+    this.id = emoji.id ?? null;
   }
 
   /**
    * The identifier of this emoji, used for message reactions
+   *
    * @type {string}
    * @readonly
    */
@@ -87,25 +46,37 @@ class Emoji extends Base {
   }
 
   /**
-   * The URL to the emoji file if it's a custom emoji
-   * @type {?string}
-   * @readonly
+   * Returns a URL for the emoji or `null` if this is not a custom emoji.
+   *
+   * @param {EmojiURLOptions} [options={}] Options for the emoji URL
+   * @returns {?string}
    */
-  get url() {
-    return this.id && this.client.rest.cdn.Emoji(this.id, this.animated ? 'gif' : 'png');
+  imageURL(options = {}) {
+    if (!this.id) return null;
+
+    // Return a dynamic extension depending on whether the emoji is animated.
+    const resolvedOptions = { extension: options.extension, size: options.size };
+
+    if (!options.extension || options.extension === 'webp') {
+      resolvedOptions.animated = options.animated ?? (this.animated || undefined);
+    }
+
+    return this.client.rest.cdn.emoji(this.id, resolvedOptions);
   }
 
   /**
    * The timestamp the emoji was created at, or null if unicode
+   *
    * @type {?number}
    * @readonly
    */
   get createdTimestamp() {
-    return this.id && SnowflakeUtil.timestampFrom(this.id);
+    return this.id && DiscordSnowflake.timestampFrom(this.id);
   }
 
   /**
    * The time the emoji was created at, or null if unicode
+   *
    * @type {?Date}
    * @readonly
    */
@@ -116,6 +87,7 @@ class Emoji extends Base {
   /**
    * When concatenated with a string, this automatically returns the text required to form a graphical emoji on Discord
    * instead of the Emoji object.
+   *
    * @returns {string}
    * @example
    * // Send a custom emoji from a guild:
@@ -126,23 +98,18 @@ class Emoji extends Base {
    * reaction.message.channel.send(`The emoji used was: ${reaction.emoji}`);
    */
   toString() {
-    return this.id ? `<${this.animated ? 'a' : ''}:${this.name}:${this.id}>` : this.name;
+    return this.id ? formatEmoji({ animated: this.animated, id: this.id, name: this.name }) : this.name;
   }
 
   toJSON() {
-    return super.toJSON({
+    const json = super.toJSON({
       guild: 'guildId',
       createdTimestamp: true,
-      url: true,
       identifier: true,
     });
+    json.imageURL = this.imageURL();
+    return json;
   }
 }
 
 exports.Emoji = Emoji;
-exports.deletedEmojis = deletedEmojis;
-
-/**
- * @external APIEmoji
- * @see {@link https://discord.com/developers/docs/resources/emoji#emoji-object}
- */

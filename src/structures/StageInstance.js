@@ -1,20 +1,11 @@
 'use strict';
 
-const process = require('node:process');
-const Base = require('./Base');
-const { PrivacyLevels } = require('../util/Constants');
-const SnowflakeUtil = require('../util/SnowflakeUtil');
-
-/**
- * @type {WeakSet<StageInstance>}
- * @private
- * @internal
- */
-const deletedStageInstances = new WeakSet();
-let deprecationEmittedForDeleted = false;
+const { DiscordSnowflake } = require('@sapphire/snowflake');
+const { Base } = require('./Base.js');
 
 /**
  * Represents a stage instance.
+ *
  * @extends {Base}
  */
 class StageInstance extends Base {
@@ -23,6 +14,7 @@ class StageInstance extends Base {
 
     /**
      * The stage instance's id
+     *
      * @type {Snowflake}
      */
     this.id = data.id;
@@ -34,6 +26,7 @@ class StageInstance extends Base {
     if ('guild_id' in data) {
       /**
        * The id of the guild associated with the stage channel
+       *
        * @type {Snowflake}
        */
       this.guildId = data.guild_id;
@@ -42,6 +35,7 @@ class StageInstance extends Base {
     if ('channel_id' in data) {
       /**
        * The id of the channel associated with the stage channel
+       *
        * @type {Snowflake}
        */
       this.channelId = data.channel_id;
@@ -50,6 +44,7 @@ class StageInstance extends Base {
     if ('topic' in data) {
       /**
        * The topic of the stage instance
+       *
        * @type {string}
        */
       this.topic = data.topic;
@@ -58,24 +53,27 @@ class StageInstance extends Base {
     if ('privacy_level' in data) {
       /**
        * The privacy level of the stage instance
-       * @type {PrivacyLevel}
+       *
+       * @type {StageInstancePrivacyLevel}
        */
-      this.privacyLevel = PrivacyLevels[data.privacy_level];
+      this.privacyLevel = data.privacy_level;
     }
 
-    if ('discoverable_disabled' in data) {
+    if ('guild_scheduled_event_id' in data) {
       /**
-       * Whether or not stage discovery is disabled
-       * @type {?boolean}
+       * The associated guild scheduled event id of this stage instance
+       *
+       * @type {?Snowflake}
        */
-      this.discoverableDisabled = data.discoverable_disabled;
+      this.guildScheduledEventId = data.guild_scheduled_event_id;
     } else {
-      this.discoverableDisabled ??= null;
+      this.guildScheduledEventId ??= null;
     }
   }
 
   /**
    * The stage channel associated with this stage instance
+   *
    * @type {?StageChannel}
    * @readonly
    */
@@ -84,37 +82,8 @@ class StageInstance extends Base {
   }
 
   /**
-   * Whether or not the stage instance has been deleted
-   * @type {boolean}
-   * @deprecated This will be removed in the next major version, see https://github.com/discordjs/discord.js/issues/7091
-   */
-  get deleted() {
-    if (!deprecationEmittedForDeleted) {
-      deprecationEmittedForDeleted = true;
-      process.emitWarning(
-        'StageInstance#deleted is deprecated, see https://github.com/discordjs/discord.js/issues/7091.',
-        'DeprecationWarning',
-      );
-    }
-
-    return deletedStageInstances.has(this);
-  }
-
-  set deleted(value) {
-    if (!deprecationEmittedForDeleted) {
-      deprecationEmittedForDeleted = true;
-      process.emitWarning(
-        'StageInstance#deleted is deprecated, see https://github.com/discordjs/discord.js/issues/7091.',
-        'DeprecationWarning',
-      );
-    }
-
-    if (value) deletedStageInstances.add(this);
-    else deletedStageInstances.delete(this);
-  }
-
-  /**
    * The guild this stage instance belongs to
+   *
    * @type {?Guild}
    * @readonly
    */
@@ -123,7 +92,18 @@ class StageInstance extends Base {
   }
 
   /**
+   * The associated guild scheduled event of this stage instance
+   *
+   * @type {?GuildScheduledEvent}
+   * @readonly
+   */
+  get guildScheduledEvent() {
+    return this.guild?.scheduledEvents.resolve(this.guildScheduledEventId) ?? null;
+  }
+
+  /**
    * Edits this stage instance.
+   *
    * @param {StageInstanceEditOptions} options The options to edit the stage instance
    * @returns {Promise<StageInstance>}
    * @example
@@ -132,12 +112,13 @@ class StageInstance extends Base {
    *  .then(stageInstance => console.log(stageInstance))
    *  .catch(console.error)
    */
-  edit(options) {
+  async edit(options) {
     return this.guild.stageInstances.edit(this.channelId, options);
   }
 
   /**
    * Deletes this stage instance.
+   *
    * @returns {Promise<StageInstance>}
    * @example
    * // Delete a stage instance
@@ -147,13 +128,12 @@ class StageInstance extends Base {
    */
   async delete() {
     await this.guild.stageInstances.delete(this.channelId);
-    const clone = this._clone();
-    deletedStageInstances.add(clone);
-    return clone;
+    return this._clone();
   }
 
   /**
    * Sets the topic of this stage instance.
+   *
    * @param {string} topic The topic for the stage instance
    * @returns {Promise<StageInstance>}
    * @example
@@ -162,21 +142,23 @@ class StageInstance extends Base {
    *  .then(stageInstance => console.log(`Set the topic to: ${stageInstance.topic}`))
    *  .catch(console.error);
    */
-  setTopic(topic) {
+  async setTopic(topic) {
     return this.guild.stageInstances.edit(this.channelId, { topic });
   }
 
   /**
    * The timestamp this stage instances was created at
+   *
    * @type {number}
    * @readonly
    */
   get createdTimestamp() {
-    return SnowflakeUtil.timestampFrom(this.id);
+    return DiscordSnowflake.timestampFrom(this.id);
   }
 
   /**
    * The time this stage instance was created at
+   *
    * @type {Date}
    * @readonly
    */
@@ -186,4 +168,3 @@ class StageInstance extends Base {
 }
 
 exports.StageInstance = StageInstance;
-exports.deletedStageInstances = deletedStageInstances;

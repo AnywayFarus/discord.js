@@ -1,12 +1,13 @@
 'use strict';
 
-const BaseGuildEmoji = require('./BaseGuildEmoji');
-const { Error } = require('../errors');
-const GuildEmojiRoleManager = require('../managers/GuildEmojiRoleManager');
-const Permissions = require('../util/Permissions');
+const { PermissionFlagsBits } = require('discord-api-types/v10');
+const { DiscordjsError, ErrorCodes } = require('../errors/index.js');
+const { GuildEmojiRoleManager } = require('../managers/GuildEmojiRoleManager.js');
+const { BaseGuildEmoji } = require('./BaseGuildEmoji.js');
 
 /**
  * Represents a custom emoji.
+ *
  * @extends {BaseGuildEmoji}
  */
 class GuildEmoji extends BaseGuildEmoji {
@@ -15,12 +16,14 @@ class GuildEmoji extends BaseGuildEmoji {
 
     /**
      * The user who created this emoji
+     *
      * @type {?User}
      */
     this.author = null;
 
     /**
      * Array of role ids this emoji is active for
+     *
      * @name GuildEmoji#_roles
      * @type {Snowflake[]}
      * @private
@@ -32,6 +35,7 @@ class GuildEmoji extends BaseGuildEmoji {
 
   /**
    * The guild this emoji is part of
+   *
    * @type {Guild}
    * @name GuildEmoji#guild
    */
@@ -51,16 +55,18 @@ class GuildEmoji extends BaseGuildEmoji {
 
   /**
    * Whether the emoji is deletable by the client user
+   *
    * @type {boolean}
    * @readonly
    */
   get deletable() {
-    if (!this.guild.me) throw new Error('GUILD_UNCACHED_ME');
-    return !this.managed && this.guild.me.permissions.has(Permissions.FLAGS.MANAGE_EMOJIS_AND_STICKERS);
+    if (!this.guild.members.me) throw new DiscordjsError(ErrorCodes.GuildUncachedMe);
+    return !this.managed && this.guild.members.me.permissions.has(PermissionFlagsBits.ManageGuildExpressions);
   }
 
   /**
    * A manager for roles this emoji is active for.
+   *
    * @type {GuildEmojiRoleManager}
    * @readonly
    */
@@ -70,79 +76,62 @@ class GuildEmoji extends BaseGuildEmoji {
 
   /**
    * Fetches the author for this emoji
+   *
    * @returns {Promise<User>}
    */
   async fetchAuthor() {
-    if (this.managed) {
-      throw new Error('EMOJI_MANAGED');
-    } else {
-      if (!this.guild.me) throw new Error('GUILD_UNCACHED_ME');
-      if (!this.guild.me.permissions.has(Permissions.FLAGS.MANAGE_EMOJIS_AND_STICKERS)) {
-        throw new Error('MISSING_MANAGE_EMOJIS_AND_STICKERS_PERMISSION', this.guild);
-      }
-    }
-    const data = await this.client.api.guilds(this.guild.id).emojis(this.id).get();
-    this._patch(data);
-    return this.author;
+    return this.guild.emojis.fetchAuthor(this);
   }
 
   /**
    * Data for editing an emoji.
-   * @typedef {Object} GuildEmojiEditData
+   *
+   * @typedef {Object} GuildEmojiEditOptions
    * @property {string} [name] The name of the emoji
    * @property {Collection<Snowflake, Role>|RoleResolvable[]} [roles] Roles to restrict emoji to
+   * @property {string} [reason] Reason for editing this emoji
    */
 
   /**
    * Edits the emoji.
-   * @param {GuildEmojiEditData} data The new data for the emoji
-   * @param {string} [reason] Reason for editing this emoji
+   *
+   * @param {GuildEmojiEditOptions} options The options to provide
    * @returns {Promise<GuildEmoji>}
    * @example
    * // Edit an emoji
    * emoji.edit({ name: 'newemoji' })
-   *   .then(e => console.log(`Edited emoji ${e}`))
+   *   .then(emoji => console.log(`Edited emoji ${emoji}`))
    *   .catch(console.error);
    */
-  async edit(data, reason) {
-    const roles = data.roles?.map(r => r.id ?? r);
-    const newData = await this.client.api
-      .guilds(this.guild.id)
-      .emojis(this.id)
-      .patch({
-        data: {
-          name: data.name,
-          roles,
-        },
-        reason,
-      });
-    const clone = this._clone();
-    clone._patch(newData);
-    return clone;
+  async edit(options) {
+    return this.guild.emojis.edit(this.id, options);
   }
 
   /**
    * Sets the name of the emoji.
+   *
    * @param {string} name The new name for the emoji
    * @param {string} [reason] Reason for changing the emoji's name
    * @returns {Promise<GuildEmoji>}
    */
-  setName(name, reason) {
-    return this.edit({ name }, reason);
+  async setName(name, reason) {
+    return this.edit({ name, reason });
   }
 
   /**
    * Deletes the emoji.
+   *
    * @param {string} [reason] Reason for deleting the emoji
    * @returns {Promise<GuildEmoji>}
    */
   async delete(reason) {
-    await this.client.api.guilds(this.guild.id).emojis(this.id).delete({ reason });
+    await this.guild.emojis.delete(this.id, reason);
     return this;
   }
 
   /**
    * Whether this emoji is the same as another one.
+   *
    * @param {GuildEmoji|APIEmoji} other The emoji to compare it to
    * @returns {boolean}
    */
@@ -168,4 +157,4 @@ class GuildEmoji extends BaseGuildEmoji {
   }
 }
 
-module.exports = GuildEmoji;
+exports.GuildEmoji = GuildEmoji;

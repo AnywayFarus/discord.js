@@ -1,12 +1,15 @@
 'use strict';
 
 const { Collection } = require('@discordjs/collection');
-const Base = require('./Base');
-const GuildPreviewEmoji = require('./GuildPreviewEmoji');
-const SnowflakeUtil = require('../util/SnowflakeUtil');
+const { DiscordSnowflake } = require('@sapphire/snowflake');
+const { Routes } = require('discord-api-types/v10');
+const { Base } = require('./Base.js');
+const { GuildPreviewEmoji } = require('./GuildPreviewEmoji.js');
+const { Sticker } = require('./Sticker.js');
 
 /**
  * Represents the data about the guild any bot can preview, connected to the specified guild.
+ *
  * @extends {Base}
  */
 class GuildPreview extends Base {
@@ -21,6 +24,7 @@ class GuildPreview extends Base {
   _patch(data) {
     /**
      * The id of this guild
+     *
      * @type {string}
      */
     this.id = data.id;
@@ -28,6 +32,7 @@ class GuildPreview extends Base {
     if ('name' in data) {
       /**
        * The name of this guild
+       *
        * @type {string}
        */
       this.name = data.name;
@@ -36,6 +41,7 @@ class GuildPreview extends Base {
     if ('icon' in data) {
       /**
        * The icon of this guild
+       *
        * @type {?string}
        */
       this.icon = data.icon;
@@ -44,6 +50,7 @@ class GuildPreview extends Base {
     if ('splash' in data) {
       /**
        * The splash icon of this guild
+       *
        * @type {?string}
        */
       this.splash = data.splash;
@@ -52,6 +59,7 @@ class GuildPreview extends Base {
     if ('discovery_splash' in data) {
       /**
        * The discovery splash icon of this guild
+       *
        * @type {?string}
        */
       this.discoverySplash = data.discovery_splash;
@@ -60,7 +68,8 @@ class GuildPreview extends Base {
     if ('features' in data) {
       /**
        * An array of enabled guild features
-       * @type {Features[]}
+       *
+       * @type {GuildFeature[]}
        */
       this.features = data.features;
     }
@@ -68,6 +77,7 @@ class GuildPreview extends Base {
     if ('approximate_member_count' in data) {
       /**
        * The approximate count of members in this guild
+       *
        * @type {number}
        */
       this.approximateMemberCount = data.approximate_member_count;
@@ -76,6 +86,7 @@ class GuildPreview extends Base {
     if ('approximate_presence_count' in data) {
       /**
        * The approximate count of online members in this guild
+       *
        * @type {number}
        */
       this.approximatePresenceCount = data.approximate_presence_count;
@@ -84,6 +95,7 @@ class GuildPreview extends Base {
     if ('description' in data) {
       /**
        * The description for this guild
+       *
        * @type {?string}
        */
       this.description = data.description;
@@ -91,30 +103,45 @@ class GuildPreview extends Base {
       this.description ??= null;
     }
 
-    if (!this.emojis) {
+    if (this.emojis) {
+      this.emojis.clear();
+    } else {
       /**
        * Collection of emojis belonging to this guild
+       *
        * @type {Collection<Snowflake, GuildPreviewEmoji>}
        */
       this.emojis = new Collection();
-    } else {
-      this.emojis.clear();
     }
+
     for (const emoji of data.emojis) {
       this.emojis.set(emoji.id, new GuildPreviewEmoji(this.client, emoji, this));
     }
+
+    /**
+     * Collection of stickers belonging to this guild
+     *
+     * @type {Collection<Snowflake, Sticker>}
+     */
+    this.stickers = data.stickers.reduce(
+      (stickers, sticker) => stickers.set(sticker.id, new Sticker(this.client, sticker)),
+      new Collection(),
+    );
   }
+
   /**
    * The timestamp this guild was created at
+   *
    * @type {number}
    * @readonly
    */
   get createdTimestamp() {
-    return SnowflakeUtil.timestampFrom(this.id);
+    return DiscordSnowflake.timestampFrom(this.id);
   }
 
   /**
    * The time this guild was created at
+   *
    * @type {Date}
    * @readonly
    */
@@ -124,43 +151,48 @@ class GuildPreview extends Base {
 
   /**
    * The URL to this guild's splash.
-   * @param {StaticImageURLOptions} [options={}] Options for the Image URL
+   *
+   * @param {ImageURLOptions} [options={}] Options for the image URL
    * @returns {?string}
    */
-  splashURL({ format, size } = {}) {
-    return this.splash && this.client.rest.cdn.Splash(this.id, this.splash, format, size);
+  splashURL(options = {}) {
+    return this.splash && this.client.rest.cdn.splash(this.id, this.splash, options);
   }
 
   /**
    * The URL to this guild's discovery splash.
-   * @param {StaticImageURLOptions} [options={}] Options for the Image URL
+   *
+   * @param {ImageURLOptions} [options={}] Options for the image URL
    * @returns {?string}
    */
-  discoverySplashURL({ format, size } = {}) {
-    return this.discoverySplash && this.client.rest.cdn.DiscoverySplash(this.id, this.discoverySplash, format, size);
+  discoverySplashURL(options = {}) {
+    return this.discoverySplash && this.client.rest.cdn.discoverySplash(this.id, this.discoverySplash, options);
   }
 
   /**
    * The URL to this guild's icon.
-   * @param {ImageURLOptions} [options={}] Options for the Image URL
+   *
+   * @param {ImageURLOptions} [options={}] Options for the image URL
    * @returns {?string}
    */
-  iconURL({ format, size, dynamic } = {}) {
-    return this.icon && this.client.rest.cdn.Icon(this.id, this.icon, format, size, dynamic);
+  iconURL(options = {}) {
+    return this.icon && this.client.rest.cdn.icon(this.id, this.icon, options);
   }
 
   /**
    * Fetches this guild.
+   *
    * @returns {Promise<GuildPreview>}
    */
   async fetch() {
-    const data = await this.client.api.guilds(this.id).preview.get();
+    const data = await this.client.rest.get(Routes.guildPreview(this.id));
     this._patch(data);
     return this;
   }
 
   /**
    * When concatenated with a string, this automatically returns the guild's name instead of the Guild object.
+   *
    * @returns {string}
    * @example
    * // Logs: Hello from My Guild!
@@ -178,4 +210,4 @@ class GuildPreview extends Base {
   }
 }
 
-module.exports = GuildPreview;
+exports.GuildPreview = GuildPreview;

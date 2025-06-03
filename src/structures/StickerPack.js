@@ -1,12 +1,13 @@
 'use strict';
 
 const { Collection } = require('@discordjs/collection');
-const Base = require('./Base');
-const { Sticker } = require('./Sticker');
-const SnowflakeUtil = require('../util/SnowflakeUtil');
+const { DiscordSnowflake } = require('@sapphire/snowflake');
+const { Base } = require('./Base.js');
+const { Sticker } = require('./Sticker.js');
 
 /**
  * Represents a pack of standard stickers.
+ *
  * @extends {Base}
  */
 class StickerPack extends Base {
@@ -14,42 +15,49 @@ class StickerPack extends Base {
     super(client);
     /**
      * The Sticker pack's id
+     *
      * @type {Snowflake}
      */
     this.id = pack.id;
 
     /**
      * The stickers in the pack
+     *
      * @type {Collection<Snowflake, Sticker>}
      */
-    this.stickers = new Collection(pack.stickers.map(s => [s.id, new Sticker(client, s)]));
+    this.stickers = new Collection(pack.stickers.map(sticker => [sticker.id, new Sticker(client, sticker)]));
 
     /**
      * The name of the sticker pack
+     *
      * @type {string}
      */
     this.name = pack.name;
 
     /**
      * The id of the pack's SKU
+     *
      * @type {Snowflake}
      */
     this.skuId = pack.sku_id;
 
     /**
      * The id of a sticker in the pack which is shown as the pack's icon
+     *
      * @type {?Snowflake}
      */
     this.coverStickerId = pack.cover_sticker_id ?? null;
 
     /**
      * The description of the sticker pack
+     *
      * @type {string}
      */
     this.description = pack.description;
 
     /**
      * The id of the sticker pack's banner image
+     *
      * @type {?Snowflake}
      */
     this.bannerId = pack.banner_asset_id ?? null;
@@ -57,15 +65,17 @@ class StickerPack extends Base {
 
   /**
    * The timestamp the sticker was created at
+   *
    * @type {number}
    * @readonly
    */
   get createdTimestamp() {
-    return SnowflakeUtil.timestampFrom(this.id);
+    return DiscordSnowflake.timestampFrom(this.id);
   }
 
   /**
    * The time the sticker was created at
+   *
    * @type {Date}
    * @readonly
    */
@@ -75,6 +85,7 @@ class StickerPack extends Base {
 
   /**
    * The sticker which is shown as the pack's icon
+   *
    * @type {?Sticker}
    * @readonly
    */
@@ -84,12 +95,13 @@ class StickerPack extends Base {
 
   /**
    * The URL to this sticker pack's banner.
-   * @param {StaticImageURLOptions} [options={}] Options for the Image URL
+   *
+   * @param {ImageURLOptions} [options={}] Options for the image URL
    * @returns {?string}
    */
-  bannerURL({ format, size } = {}) {
-    return this.bannerId && this.client.rest.cdn.StickerPackBanner(this.bannerId, format, size);
+  bannerURL(options = {}) {
+    return this.bannerId && this.client.rest.cdn.stickerPackBanner(this.bannerId, options);
   }
 }
 
-module.exports = StickerPack;
+exports.StickerPack = StickerPack;

@@ -1,10 +1,13 @@
 'use strict';
 
-const Base = require('./Base');
-const SnowflakeUtil = require('../util/SnowflakeUtil');
+const { makeURLSearchParams } = require('@discordjs/rest');
+const { DiscordSnowflake } = require('@sapphire/snowflake');
+const { Routes, GuildFeature } = require('discord-api-types/v10');
+const { Base } = require('./Base.js');
 
 /**
  * The base class for {@link Guild}, {@link OAuth2Guild} and {@link InviteGuild}.
+ *
  * @extends {Base}
  * @abstract
  */
@@ -14,40 +17,46 @@ class BaseGuild extends Base {
 
     /**
      * The guild's id
+     *
      * @type {Snowflake}
      */
     this.id = data.id;
 
     /**
      * The name of this guild
+     *
      * @type {string}
      */
     this.name = data.name;
 
     /**
      * The icon hash of this guild
+     *
      * @type {?string}
      */
     this.icon = data.icon;
 
     /**
      * An array of features available to this guild
-     * @type {Features[]}
+     *
+     * @type {GuildFeature[]}
      */
     this.features = data.features;
   }
 
   /**
    * The timestamp this guild was created at
+   *
    * @type {number}
    * @readonly
    */
   get createdTimestamp() {
-    return SnowflakeUtil.timestampFrom(this.id);
+    return DiscordSnowflake.timestampFrom(this.id);
   }
 
   /**
    * The time this guild was created at
+   *
    * @type {Date}
    * @readonly
    */
@@ -57,55 +66,64 @@ class BaseGuild extends Base {
 
   /**
    * The acronym that shows up in place of a guild icon
+   *
    * @type {string}
    * @readonly
    */
   get nameAcronym() {
+    /* eslint-disable unicorn/prefer-string-replace-all */
     return this.name
       .replace(/'s /g, ' ')
-      .replace(/\w+/g, e => e[0])
+      .replace(/\w+/g, word => word[0])
       .replace(/\s/g, '');
+    /* eslint-enable unicorn/prefer-string-replace-all */
   }
 
   /**
    * Whether this guild is partnered
+   *
    * @type {boolean}
    * @readonly
    */
   get partnered() {
-    return this.features.includes('PARTNERED');
+    return this.features.includes(GuildFeature.Partnered);
   }
 
   /**
    * Whether this guild is verified
+   *
    * @type {boolean}
    * @readonly
    */
   get verified() {
-    return this.features.includes('VERIFIED');
+    return this.features.includes(GuildFeature.Verified);
   }
 
   /**
    * The URL to this guild's icon.
-   * @param {ImageURLOptions} [options={}] Options for the Image URL
+   *
+   * @param {ImageURLOptions} [options={}] Options for the image URL
    * @returns {?string}
    */
-  iconURL({ format, size, dynamic } = {}) {
-    if (!this.icon) return null;
-    return this.client.rest.cdn.Icon(this.id, this.icon, format, size, dynamic);
+  iconURL(options = {}) {
+    return this.icon && this.client.rest.cdn.icon(this.id, this.icon, options);
   }
 
   /**
    * Fetches this guild.
+   *
    * @returns {Promise<Guild>}
    */
   async fetch() {
-    const data = await this.client.api.guilds(this.id).get({ query: { with_counts: true } });
+    const data = await this.client.rest.get(Routes.guild(this.id), {
+      query: makeURLSearchParams({ with_counts: true }),
+    });
     return this.client.guilds._add(data);
   }
 
   /**
    * When concatenated with a string, this automatically returns the guild's name instead of the Guild object.
+   *
    * @returns {string}
    */
   toString() {
@@ -113,4 +131,4 @@ class BaseGuild extends Base {
   }
 }
 
-module.exports = BaseGuild;
+exports.BaseGuild = BaseGuild;

@@ -1,39 +1,55 @@
 'use strict';
 
-const Base = require('./Base');
-const { GuildScheduledEvent } = require('./GuildScheduledEvent');
-const IntegrationApplication = require('./IntegrationApplication');
-const InviteStageInstance = require('./InviteStageInstance');
-const { Error } = require('../errors');
-const { Endpoints } = require('../util/Constants');
-const Permissions = require('../util/Permissions');
-
-// Convert `inviter` and `channel` in this class to a getter.
+const { RouteBases, Routes, PermissionFlagsBits } = require('discord-api-types/v10');
+const { DiscordjsError, ErrorCodes } = require('../errors/index.js');
+const { Base } = require('./Base.js');
+const { GuildScheduledEvent } = require('./GuildScheduledEvent.js');
+const { IntegrationApplication } = require('./IntegrationApplication.js');
 
 /**
  * Represents an invitation to a guild channel.
+ *
  * @extends {Base}
  */
 class Invite extends Base {
+  /**
+   * A regular expression that matches Discord invite links.
+   * The `code` group property is present on the `exec()` result of this expression.
+   *
+   * @type {RegExp}
+   * @memberof Invite
+   */
+  static InvitesPattern = /discord(?:(?:app)?\.com\/invite|\.gg(?:\/invite)?)\/(?<code>[\w-]{2,255})/i;
+
   constructor(client, data) {
     super(client);
+
+    /**
+     * The type of this invite
+     *
+     * @type {InviteType}
+     */
+    this.type = data.type;
+
     this._patch(data);
   }
 
   _patch(data) {
-    const InviteGuild = require('./InviteGuild');
+    const { InviteGuild } = require('./InviteGuild.js');
     /**
      * The guild the invite is for including welcome screen data if present
+     *
      * @type {?(Guild|InviteGuild)}
      */
     this.guild ??= null;
     if (data.guild) {
-      this.guild = this.client.guilds.resolve(data.guild.id) ?? new InviteGuild(this.client, data.guild);
+      this.guild = this.client.guilds.cache.get(data.guild.id) ?? new InviteGuild(this.client, data.guild);
     }
 
     if ('code' in data) {
       /**
        * The code for this invite
+       *
        * @type {string}
        */
       this.code = data.code;
@@ -43,6 +59,7 @@ class Invite extends Base {
       /**
        * The approximate number of online members of the guild this invite is for
        * <info>This is only available when the invite was fetched through {@link Client#fetchInvite}.</info>
+       *
        * @type {?number}
        */
       this.presenceCount = data.approximate_presence_count;
@@ -54,6 +71,7 @@ class Invite extends Base {
       /**
        * The approximate total number of members of the guild this invite is for
        * <info>This is only available when the invite was fetched through {@link Client#fetchInvite}.</info>
+       *
        * @type {?number}
        */
       this.memberCount = data.approximate_member_count;
@@ -66,6 +84,7 @@ class Invite extends Base {
        * Whether or not this invite only grants temporary membership
        * <info>This is only available when the invite was fetched through {@link GuildInviteManager#fetch}
        * or created through {@link GuildInviteManager#create}.</info>
+       *
        * @type {?boolean}
        */
       this.temporary = data.temporary ?? null;
@@ -78,6 +97,7 @@ class Invite extends Base {
        * The maximum age of the invite, in seconds, 0 if never expires
        * <info>This is only available when the invite was fetched through {@link GuildInviteManager#fetch}
        * or created through {@link GuildInviteManager#create}.</info>
+       *
        * @type {?number}
        */
       this.maxAge = data.max_age;
@@ -90,6 +110,7 @@ class Invite extends Base {
        * How many times this invite has been used
        * <info>This is only available when the invite was fetched through {@link GuildInviteManager#fetch}
        * or created through {@link GuildInviteManager#create}.</info>
+       *
        * @type {?number}
        */
       this.uses = data.uses;
@@ -102,6 +123,7 @@ class Invite extends Base {
        * The maximum uses of this invite
        * <info>This is only available when the invite was fetched through {@link GuildInviteManager#fetch}
        * or created through {@link GuildInviteManager#create}.</info>
+       *
        * @type {?number}
        */
       this.maxUses = data.max_uses;
@@ -112,28 +134,23 @@ class Invite extends Base {
     if ('inviter_id' in data) {
       /**
        * The user's id who created this invite
+       *
        * @type {?Snowflake}
        */
       this.inviterId = data.inviter_id;
-      this.inviter = this.client.users.resolve(data.inviter_id);
     } else {
       this.inviterId ??= null;
     }
 
     if ('inviter' in data) {
-      /**
-       * The user who created this invite
-       * @type {?User}
-       */
-      this.inviter ??= this.client.users._add(data.inviter);
+      this.client.users._add(data.inviter);
       this.inviterId = data.inviter.id;
-    } else {
-      this.inviter ??= null;
     }
 
     if ('target_user' in data) {
       /**
        * The user whose stream to display for this voice channel stream invite
+       *
        * @type {?User}
        */
       this.targetUser = this.client.users._add(data.target_user);
@@ -144,6 +161,7 @@ class Invite extends Base {
     if ('target_application' in data) {
       /**
        * The embedded application to open for this voice channel embedded application invite
+       *
        * @type {?IntegrationApplication}
        */
       this.targetApplication = new IntegrationApplication(this.client, data.target_application);
@@ -151,18 +169,11 @@ class Invite extends Base {
       this.targetApplication ??= null;
     }
 
-    /**
-     * The type of the invite target:
-     * * 1: STREAM
-     * * 2: EMBEDDED_APPLICATION
-     * @typedef {number} TargetType
-     * @see {@link https://discord.com/developers/docs/resources/invite#invite-object-invite-target-types}
-     */
-
     if ('target_type' in data) {
       /**
        * The target type
-       * @type {?TargetType}
+       *
+       * @type {?InviteTargetType}
        */
       this.targetType = data.target_type;
     } else {
@@ -171,48 +182,47 @@ class Invite extends Base {
 
     if ('channel_id' in data) {
       /**
-       * The channel's id this invite is for
-       * @type {Snowflake}
+       * The id of the channel this invite is for
+       *
+       * @type {?Snowflake}
        */
       this.channelId = data.channel_id;
-      this.channel = this.client.channels.cache.get(data.channel_id);
     }
 
     if ('channel' in data) {
       /**
        * The channel this invite is for
-       * @type {Channel}
+       *
+       * @type {?BaseChannel}
        */
-      this.channel ??= this.client.channels._add(data.channel, this.guild, { cache: false });
+      this.channel =
+        this.client.channels._add(data.channel, this.guild, { cache: false }) ??
+        this.client.channels.resolve(this.channelId);
+
       this.channelId ??= data.channel.id;
     }
 
     if ('created_at' in data) {
       /**
        * The timestamp this invite was created at
+       *
        * @type {?number}
        */
-      this.createdTimestamp = new Date(data.created_at).getTime();
+      this.createdTimestamp = Date.parse(data.created_at);
     } else {
       this.createdTimestamp ??= null;
     }
 
-    if ('expires_at' in data) this._expiresTimestamp = new Date(data.expires_at).getTime();
-    else this._expiresTimestamp ??= null;
-
-    if ('stage_instance' in data) {
-      /**
-       * The stage instance data if there is a public {@link StageInstance} in the stage channel this invite is for
-       * @type {?InviteStageInstance}
-       */
-      this.stageInstance = new InviteStageInstance(this.client, data.stage_instance, this.channel.id, this.guild.id);
+    if ('expires_at' in data) {
+      this._expiresTimestamp = data.expires_at && Date.parse(data.expires_at);
     } else {
-      this.stageInstance ??= null;
+      this._expiresTimestamp ??= null;
     }
 
     if ('guild_scheduled_event' in data) {
       /**
        * The guild scheduled event data if there is a {@link GuildScheduledEvent} in the channel this invite is for
+       *
        * @type {?GuildScheduledEvent}
        */
       this.guildScheduledEvent = new GuildScheduledEvent(this.client, data.guild_scheduled_event);
@@ -223,30 +233,34 @@ class Invite extends Base {
 
   /**
    * The time the invite was created at
+   *
    * @type {?Date}
    * @readonly
    */
   get createdAt() {
-    return this.createdTimestamp ? new Date(this.createdTimestamp) : null;
+    return this.createdTimestamp && new Date(this.createdTimestamp);
   }
 
   /**
    * Whether the invite is deletable by the client user
+   *
    * @type {boolean}
    * @readonly
    */
   get deletable() {
     const guild = this.guild;
     if (!guild || !this.client.guilds.cache.has(guild.id)) return false;
-    if (!guild.me) throw new Error('GUILD_UNCACHED_ME');
+    if (!guild.members.me) throw new DiscordjsError(ErrorCodes.GuildUncachedMe);
+
     return (
-      this.channel.permissionsFor(this.client.user).has(Permissions.FLAGS.MANAGE_CHANNELS, false) ||
-      guild.me.permissions.has(Permissions.FLAGS.MANAGE_GUILD)
+      this.channel?.permissionsFor(this.client.user).has(PermissionFlagsBits.ManageChannels, false) ||
+      guild.members.me.permissions.has(PermissionFlagsBits.ManageGuild)
     );
   }
 
   /**
    * The timestamp the invite will expire at
+   *
    * @type {?number}
    * @readonly
    */
@@ -259,35 +273,48 @@ class Invite extends Base {
 
   /**
    * The time the invite will expire at
+   *
    * @type {?Date}
    * @readonly
    */
   get expiresAt() {
-    const { expiresTimestamp } = this;
-    return expiresTimestamp ? new Date(expiresTimestamp) : null;
+    return this.expiresTimestamp && new Date(this.expiresTimestamp);
+  }
+
+  /**
+   * The user who created this invite
+   *
+   * @type {?User}
+   * @readonly
+   */
+  get inviter() {
+    return this.inviterId && this.client.users.resolve(this.inviterId);
   }
 
   /**
    * The URL to the invite
+   *
    * @type {string}
    * @readonly
    */
   get url() {
-    return Endpoints.invite(this.client.options.http.invite, this.code);
+    return `${RouteBases.invite}/${this.code}`;
   }
 
   /**
    * Deletes this invite.
+   *
    * @param {string} [reason] Reason for deleting this invite
    * @returns {Promise<Invite>}
    */
   async delete(reason) {
-    await this.client.api.invites[this.code].delete({ reason });
+    await this.client.rest.delete(Routes.invite(this.code), { reason });
     return this;
   }
 
   /**
    * When concatenated with a string, this automatically concatenates the invite's URL instead of the object.
+   *
    * @returns {string}
    * @example
    * // Logs: Invite: https://discord.gg/A1b2C3
@@ -315,10 +342,4 @@ class Invite extends Base {
   }
 }
 
-/**
- * Regular expression that globally matches Discord invite links
- * @type {RegExp}
- */
-Invite.INVITES_PATTERN = /discord(?:(?:app)?\.com\/invite|\.gg(?:\/invite)?)\/([\w-]{2,255})/gi;
-
-module.exports = Invite;
+exports.Invite = Invite;
