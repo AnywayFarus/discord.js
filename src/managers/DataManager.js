@@ -1,10 +1,11 @@
 'use strict';
 
-const BaseManager = require('./BaseManager');
-const { Error } = require('../errors');
+const { DiscordjsError, ErrorCodes } = require('../errors/index.js');
+const { BaseManager } = require('./BaseManager.js');
 
 /**
  * Manages the API methods of a data model along with a collection of instances.
+ *
  * @extends {BaseManager}
  * @abstract
  */
@@ -14,6 +15,7 @@ class DataManager extends BaseManager {
 
     /**
      * The data structure belonging to this manager.
+     *
      * @name DataManager#holds
      * @type {Function}
      * @private
@@ -24,16 +26,18 @@ class DataManager extends BaseManager {
 
   /**
    * The cache of items for this manager.
+   *
    * @type {Collection}
    * @abstract
    */
   get cache() {
-    throw new Error('NOT_IMPLEMENTED', 'get cache', this.constructor.name);
+    throw new DiscordjsError(ErrorCodes.NotImplemented, 'get cache', this.constructor.name);
   }
 
   /**
    * Resolves a data entry to a data Object.
-   * @param {string|Object} idOrInstance The id or instance of something in this Manager
+   *
+   * @param {string | Object} idOrInstance The id or instance of something in this Manager
    * @returns {?Object} An instance from this Manager
    */
   resolve(idOrInstance) {
@@ -44,7 +48,8 @@ class DataManager extends BaseManager {
 
   /**
    * Resolves a data entry to an instance id.
-   * @param {string|Object} idOrInstance The id or instance of something in this Manager
+   *
+   * @param {string | Object} idOrInstance The id or instance of something in this Manager
    * @returns {?Snowflake}
    */
   resolveId(idOrInstance) {
@@ -58,4 +63,4 @@ class DataManager extends BaseManager {
   }
 }
 
-module.exports = DataManager;
+exports.DataManager = DataManager;

@@ -1,10 +1,12 @@
 'use strict';
 
-const CachedManager = require('./CachedManager');
-const MessageReaction = require('../structures/MessageReaction');
+const { Routes } = require('discord-api-types/v10');
+const { MessageReaction } = require('../structures/MessageReaction.js');
+const { CachedManager } = require('./CachedManager.js');
 
 /**
  * Manages API methods for reactions and holds their cache.
+ *
  * @extends {CachedManager}
  */
 class ReactionManager extends CachedManager {
@@ -13,6 +15,7 @@ class ReactionManager extends CachedManager {
 
     /**
      * The message that this manager belongs to
+     *
      * @type {Message}
      */
     this.message = message;
@@ -24,19 +27,23 @@ class ReactionManager extends CachedManager {
 
   /**
    * The reaction cache of this manager
+   *
    * @type {Collection<string|Snowflake, MessageReaction>}
    * @name ReactionManager#cache
    */
 
   /**
    * Data that can be resolved to a MessageReaction object. This can be:
-   * * A MessageReaction
-   * * A Snowflake
+   * - A MessageReaction
+   * - A Snowflake
+   * - The Unicode representation of an emoji
+   *
    * @typedef {MessageReaction|Snowflake} MessageReactionResolvable
    */
 
   /**
    * Resolves a {@link MessageReactionResolvable} to a {@link MessageReaction} object.
+   *
    * @method resolve
    * @memberof ReactionManager
    * @instance
@@ -46,6 +53,7 @@ class ReactionManager extends CachedManager {
 
   /**
    * Resolves a {@link MessageReactionResolvable} to a {@link MessageReaction} id.
+   *
    * @method resolveId
    * @memberof ReactionManager
    * @instance
@@ -55,12 +63,13 @@ class ReactionManager extends CachedManager {
 
   /**
    * Removes all reactions from a message.
+   *
    * @returns {Promise<Message>}
    */
   async removeAll() {
-    await this.client.api.channels(this.message.channelId).messages(this.message.id).reactions.delete();
+    await this.client.rest.delete(Routes.channelMessageAllReactions(this.message.channelId, this.message.id));
     return this.message;
   }
 }
 
-module.exports = ReactionManager;
+exports.ReactionManager = ReactionManager;
