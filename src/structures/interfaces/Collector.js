@@ -1,6 +1,6 @@
 'use strict';
 
-const { setTimeout, clearTimeout } = require('node:timers');
+
 const { Collection } = require('@discordjs/collection');
 const { AsyncEventEmitter } = require('@vladfrangu/async_event_emitter');
 const { DiscordjsTypeError, ErrorCodes } = require('../../errors/index.js');

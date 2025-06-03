@@ -1,6 +1,6 @@
 'use strict';
 
-const { setTimeout, clearTimeout } = require('node:timers');
+
 const { RouteBases, Routes } = require('discord-api-types/v10');
 const { resolveImage } = require('../util/DataResolver.js');
 const { Events } = require('../util/Events.js');
