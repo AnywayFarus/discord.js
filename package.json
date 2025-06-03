@@ -55,6 +55,7 @@
     "@sapphire/async-queue": "^1.1.9",
     "@types/node-fetch": "^2.5.12",
     "@types/ws": "^8.2.2",
+    "@sapphire/snowflake": "3.5.5",
     "discord-api-types": "^0.38.1",
     "form-data": "^4.0.0",
     "node-fetch": "^2.6.1",
